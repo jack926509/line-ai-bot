@@ -39,11 +39,7 @@ handler       = WebhookHandler(LINE_CHANNEL_SECRET)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 scheduler     = AsyncIOScheduler(timezone="Asia/Taipei")
 
-# 對話記憶（每個 userId 各自保留）
-conversation_history: dict[str, list] = {}
-
-# 待辦事項（每個 userId 各自保留）
-user_todos: dict[str, list[tuple[str, bool]]] = {}
+import db
 
 # Bot 自己的 userId（群組判斷 mention 用）
 BOT_USER_ID = ""
@@ -117,6 +113,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[警告] 無法取得 Bot userId: {e}")
 
+    # 初始化資料庫
+    db.init_db()
+
     # 啟動排程
     if GROUP_ID:
         scheduler.add_job(send_morning_message, CronTrigger(hour=8, minute=0))
@@ -153,8 +152,6 @@ async def webhook(request: Request):
 # Claude 對話（支援圖片）
 # ─────────────────────────────────────────────
 def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
-    history = conversation_history.setdefault(user_id, [])
-
     # 組合訊息內容
     if image_b64:
         content = [
@@ -164,20 +161,22 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     else:
         content = text
 
-    history.append({"role": "user", "content": content})
+    # 儲存使用者訊息
+    db.save_message(user_id, "user", content)
 
-    # 只保留最近 10 輪（20 條）
-    if len(history) > 20:
-        conversation_history[user_id] = history[-20:]
+    # 取得歷史（已自動裁剪）
+    messages = db.get_history(user_id)
 
     response = anthropic_client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
         system=GIRLFRIEND_SYSTEM_PROMPT,
-        messages=conversation_history[user_id],
+        messages=messages,
     )
     reply = response.content[0].text
-    history.append({"role": "assistant", "content": reply})
+
+    # 儲存助手回覆
+    db.save_message(user_id, "assistant", reply)
     return reply
 
 # ─────────────────────────────────────────────
@@ -263,27 +262,29 @@ def handle_command(text: str) -> str | None:
 
 
 def handle_todo(text: str, user_id: str) -> str:
-    """待辦事項完整處理"""
+    """待辦事項完整處理（SQLite 持久化）"""
     t = text.strip()
     parts = t.split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 else ""
 
-    todos = user_todos.setdefault(user_id, [])
-
     # 查看清單
     if not arg:
+        todos = db.get_todos(user_id)
         if not todos:
             return "📝 你的待辦清單是空的喔～\n要新增的話輸入 /待辦 事項內容"
-        lines = [f"{'✅' if done else '⬜'} {i+1}. {item}" for i, (item, done) in enumerate(todos)]
-        return f"📝 你的待辦清單：\n{''.join(chr(10) + l for l in lines)}"
+        lines = []
+        for i, (_id, content, done) in enumerate(todos, 1):
+            mark = "✅" if done else "⬜"
+            lines.append(f"{mark} {i}. {content}")
+        return "📝 你的待辦清單：\n" + "\n".join(lines)
 
     # 完成項目
     if arg.startswith("完成 ") or arg.startswith("done "):
         try:
-            idx = int(arg.split()[1]) - 1
-            if 0 <= idx < len(todos):
-                todos[idx] = (todos[idx][0], True)
-                return f"✅ 太棒了！「{todos[idx][0]}」完成囉～"
+            idx = int(arg.split()[1])
+            name = db.complete_todo(user_id, idx)
+            if name:
+                return f"✅ 太棒了！「{name}」完成囉～"
             return "⚠️ 編號不對喔，用 /待辦 查看清單"
         except (ValueError, IndexError):
             return "⚠️ 用法：/待辦 完成 1"
@@ -291,22 +292,22 @@ def handle_todo(text: str, user_id: str) -> str:
     # 刪除項目
     if arg.startswith("刪除 ") or arg.startswith("del "):
         try:
-            idx = int(arg.split()[1]) - 1
-            if 0 <= idx < len(todos):
-                removed = todos.pop(idx)
-                return f"🗑 已刪除「{removed[0]}」"
+            idx = int(arg.split()[1])
+            name = db.delete_todo(user_id, idx)
+            if name:
+                return f"🗑 已刪除「{name}」"
             return "⚠️ 編號不對喔，用 /待辦 查看清單"
         except (ValueError, IndexError):
             return "⚠️ 用法：/待辦 刪除 1"
 
     # 清空
     if arg in ("清空", "clear"):
-        user_todos[user_id] = []
+        db.clear_todos(user_id)
         return "🗑 待辦清單已清空～"
 
     # 新增項目
-    todos.append((arg, False))
-    return f"📝 已新增待辦：「{arg}」\n目前共 {len(todos)} 項待辦事項"
+    count = db.add_todo(user_id, arg)
+    return f"📝 已新增待辦：「{arg}」\n目前共 {count} 項待辦事項"
 
 # ─────────────────────────────────────────────
 # 處理文字訊息
