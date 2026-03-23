@@ -3,6 +3,5 @@ uvicorn[standard]
 line-bot-sdk>=3.0.0
 anthropic
 apscheduler
-yfinance
 requests
 python-dotenv
