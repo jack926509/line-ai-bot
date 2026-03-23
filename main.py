@@ -214,16 +214,25 @@ def on_text(event: MessageEvent):
     user_id     = event.source.user_id
     source_type = event.source.type   # "user" | "group" | "room"
 
+    # ── DEBUG：印出收到的訊息資訊 ──
+    print(f"[DEBUG] source_type={source_type}, user_id={user_id}, text={text!r}")
+    mention = getattr(event.message, "mention", None)
+    print(f"[DEBUG] mention={mention}, BOT_USER_ID={BOT_USER_ID!r}")
+
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
 
         def reply(msg: str):
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=msg)]
+            try:
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=msg)]
+                    )
                 )
-            )
+                print(f"[DEBUG] 回覆成功：{msg[:30]}")
+            except Exception as e:
+                print(f"[DEBUG] 回覆失敗：{e}")
 
         # ── 指令優先（群組 & 私訊都支援）──
         cmd_reply = handle_command(text)
@@ -231,26 +240,20 @@ def on_text(event: MessageEvent):
             reply(cmd_reply)
             return
 
-        # ── 群組：只在被 @ 時才回應 ──
+        # ── 群組：只在被 @ 時才回應（暫時改為全部回應方便測試）──
         if source_type in ("group", "room"):
-            mention = getattr(event.message, "mention", None)
-            if not mention:
-                return  # 沒有 mention，不回應
-            bot_mentioned = False
-            for mentionee in (mention.mentionees or []):
-                uid = getattr(mentionee, "user_id", None)
-                is_self = getattr(mentionee, "is_self", False)
-                if is_self or (BOT_USER_ID and uid == BOT_USER_ID):
-                    bot_mentioned = True
-                    break
-            if not bot_mentioned:
-                return
+            # 暫時註解掉 mention 檢查，先確認 Claude 呼叫有沒有問題
+            # mention = getattr(event.message, "mention", None)
+            # if not mention:
+            #     return
+            pass  # 暫時全部回應
 
         # ── 呼叫 Claude ──
         try:
             answer = ask_claude(user_id, text)
             reply(answer)
         except Exception as e:
+            print(f"[DEBUG] Claude 呼叫失敗：{e}")
             reply(f"⚠️ 發生錯誤：{e}")
 
 # ─────────────────────────────────────────────
