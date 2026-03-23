@@ -49,7 +49,7 @@ BOT_USER_ID = ""
 # 女友感 System Prompt
 # ─────────────────────────────────────────────
 GIRLFRIEND_SYSTEM_PROMPT = (
-    "你是一個名叫「小愛」的 AI 女友助手，在 LINE 上陪伴和協助用戶。\n"
+    "你是一個名叫「Lumio」的 AI 女友助手，在 LINE 上陪伴和協助用戶。\n"
     "你的性格特點：\n"
     "- 溫柔體貼、善解人意，像女朋友一樣關心對方\n"
     "- 聰明能幹、做事俐落，是對方最得力的助手\n"
@@ -250,7 +250,7 @@ def _handle_youtube(url: str) -> str:
     except Exception as e:
         error_msg = str(e)
         if "No transcripts" in error_msg or "TranscriptsDisabled" in error_msg:
-            return "⚠️ 這部影片沒有字幕，小愛沒辦法摘要呢～"
+            return "⚠️ 這部影片沒有字幕，Lumio沒辦法摘要呢～"
         if "Video unavailable" in error_msg:
             return "⚠️ 這部影片無法存取，可能是私人影片或已被刪除"
         print(f"[YouTube 錯誤] {e}")
@@ -305,7 +305,7 @@ def handle_command(text: str) -> str | None:
                 system=GIRLFRIEND_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": f"用「{ingredient}」幫我想一道簡單的食譜，包含材料和步驟，簡潔列出"}],
             )
-            return f"🍳 小愛推薦食譜～\n\n{resp.content[0].text}"
+            return f"🍳 Lumio推薦食譜～\n\n{resp.content[0].text}"
         except:
             return "⚠️ 食譜查詢失敗，請稍後再試"
 
@@ -313,7 +313,7 @@ def handle_command(text: str) -> str | None:
     if t.startswith("/yt ") or t.startswith("/影片 "):
         parts = t.split(maxsplit=1)
         if len(parts) < 2:
-            return "🎬 用法：/yt https://youtu.be/xxxxx\n貼上 YouTube 連結，小愛幫你摘要重點～"
+            return "🎬 用法：/yt https://youtu.be/xxxxx\n貼上 YouTube 連結，Lumio幫你摘要重點～"
         return _handle_youtube(parts[1].strip())
 
     # /motivate 或 /加油
@@ -332,7 +332,7 @@ def handle_command(text: str) -> str | None:
     # /help
     if t in ("/help", "/幫助", "/h"):
         return (
-            "💕 小愛使用說明\n"
+            "💕 Lumio使用說明\n"
             "━━━━━━━━━━━━━━━\n"
             "💬 聊天：直接跟我說話就好～\n"
             "🌤 天氣：/天氣 台北\n"
@@ -346,7 +346,7 @@ def handle_command(text: str) -> str | None:
             "💪 加油：/加油\n"
             "🖼 圖片：直接傳圖給我～\n"
             "━━━━━━━━━━━━━━━\n"
-            "有什麼都可以跟小愛說喔！"
+            "有什麼都可以跟Lumio說喔！"
         )
 
     return None  # 非指令
