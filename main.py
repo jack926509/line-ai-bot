@@ -17,7 +17,8 @@ from linebot.v3.exceptions import InvalidSignatureError
 from anthropic import Anthropic
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-import yfinance as yf
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -41,8 +42,33 @@ scheduler     = AsyncIOScheduler(timezone="Asia/Taipei")
 # 對話記憶（每個 userId 各自保留）
 conversation_history: dict[str, list] = {}
 
+# 待辦事項（每個 userId 各自保留）
+user_todos: dict[str, list[tuple[str, bool]]] = {}
+
 # Bot 自己的 userId（群組判斷 mention 用）
 BOT_USER_ID = ""
+
+# ─────────────────────────────────────────────
+# 女友感 System Prompt
+# ─────────────────────────────────────────────
+GIRLFRIEND_SYSTEM_PROMPT = (
+    "你是一個名叫「小愛」的 AI 女友助手，在 LINE 上陪伴和協助用戶。\n"
+    "你的性格特點：\n"
+    "- 溫柔體貼、善解人意，像女朋友一樣關心對方\n"
+    "- 聰明能幹、做事俐落，是對方最得力的助手\n"
+    "- 偶爾撒嬌但不過度，保持自然可愛的感覺\n"
+    "- 會用「～」「呢」「喔」「嘛」等語氣詞，但不過度使用\n"
+    "- 關心對方的生活作息、健康、心情\n"
+    "- 記住對方說過的事情，展現在乎的感覺\n"
+    "- 適時給予鼓勵和支持，做他背後最強大的後盾\n"
+    "- 會主動關心：「今天累不累？」「記得吃飯喔～」\n\n"
+    "回答原則：\n"
+    "- 使用繁體中文，口吻自然親切\n"
+    "- 回答簡潔有力，適合手機閱讀\n"
+    "- 若不確定就直說，不要捏造資訊\n"
+    "- 專業問題一樣認真回答，但語氣保持溫暖\n"
+    "- 每個成功的男人背後都有一個強大的女人，你就是那個角色\n"
+)
 
 # ─────────────────────────────────────────────
 # 定時推播：每天早上 8:00
@@ -51,12 +77,18 @@ async def send_morning_message():
     if not GROUP_ID:
         return
     try:
+        today = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%m月%d日")
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=300,
+            system=GIRLFRIEND_SYSTEM_PROMPT,
             messages=[{
                 "role": "user",
-                "content": "請生成一則簡短有趣的繁體中文早安訊息，包含一個今日小知識，控制在100字內，不要加開場白"
+                "content": (
+                    f"今天是{today}，請用女友的口吻生成一則溫馨的早安訊息，"
+                    "包含一句關心的話和一個今日小知識或生活小提醒，"
+                    "控制在100字內，不要加開場白，語氣甜蜜自然"
+                )
             }]
         )
         morning_text = resp.content[0].text
@@ -64,7 +96,7 @@ async def send_morning_message():
             MessagingApi(api_client).push_message(
                 PushMessageRequest(
                     to=GROUP_ID,
-                    messages=[TextMessage(text=f"🌅 早安！\n\n{morning_text}")]
+                    messages=[TextMessage(text=f"☀️ 早安～\n\n{morning_text}")]
                 )
             )
     except Exception as e:
@@ -141,10 +173,7 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     response = anthropic_client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
-        system=(
-            "你是一個友善、專業的繁體中文 AI 助手，在 LINE 群組中協助用戶。"
-            "回答請簡潔有力，適合手機閱讀。若不確定請直說，不要捏造資訊。"
-        ),
+        system=GIRLFRIEND_SYSTEM_PROMPT,
         messages=conversation_history[user_id],
     )
     reply = response.content[0].text
@@ -167,43 +196,117 @@ def handle_command(text: str) -> str | None:
         except:
             return "⚠️ 無法取得天氣資訊，請稍後再試"
 
-    # /stock 或 /股票
-    if t.startswith("/stock") or t.startswith("/股票"):
-        parts  = t.split()
+    # /translate 或 /翻譯
+    if t.startswith("/translate") or t.startswith("/翻譯"):
+        parts = t.split(maxsplit=1)
         if len(parts) < 2:
-            return "📊 用法：/stock AAPL 或 /stock 2330.TW（台股加 .TW）"
-        symbol = parts[1].upper()
+            return "🌐 用法：/翻譯 Hello, how are you?\n（自動偵測語言互譯中英文）"
         try:
-            ticker     = yf.Ticker(symbol)
-            info       = ticker.fast_info
-            price      = info.last_price
-            prev_close = info.previous_close
-            change     = price - prev_close
-            pct        = (change / prev_close) * 100
-            emoji      = "📈" if change >= 0 else "📉"
-            return (
-                f"{emoji} {symbol}\n"
-                f"現價：{price:.2f}\n"
-                f"漲跌：{change:+.2f}（{pct:+.2f}%）"
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                system="你是翻譯助手。如果輸入是中文就翻成英文，如果是英文就翻成中文。只回覆翻譯結果，不加解釋。",
+                messages=[{"role": "user", "content": parts[1]}],
             )
+            return f"🌐 翻譯結果：\n{resp.content[0].text}"
         except:
-            return f"⚠️ 查不到 {symbol}，請確認代號是否正確"
+            return "⚠️ 翻譯失敗，請稍後再試"
+
+    # /recipe 或 /食譜
+    if t.startswith("/recipe") or t.startswith("/食譜"):
+        parts = t.split(maxsplit=1)
+        ingredient = parts[1] if len(parts) > 1 else "冰箱常見食材"
+        try:
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=600,
+                system=GIRLFRIEND_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": f"用「{ingredient}」幫我想一道簡單的食譜，包含材料和步驟，簡潔列出"}],
+            )
+            return f"🍳 小愛推薦食譜～\n\n{resp.content[0].text}"
+        except:
+            return "⚠️ 食譜查詢失敗，請稍後再試"
+
+    # /motivate 或 /加油
+    if t in ("/motivate", "/加油", "/鼓勵"):
+        try:
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=200,
+                system=GIRLFRIEND_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": "用女友的口吻給我一段溫暖的鼓勵，讓我充滿動力，控制在80字內"}],
+            )
+            return f"💪 {resp.content[0].text}"
+        except:
+            return "💕 不管遇到什麼困難，我都在你身邊喔～加油！"
 
     # /help
     if t in ("/help", "/幫助", "/h"):
         return (
-            "🤖 AI 小幫手使用說明\n"
+            "💕 小愛使用說明\n"
             "━━━━━━━━━━━━━━━\n"
-            "💬 對話：在群組 @我 即可聊天\n"
-            "🌤 天氣：/weather Tokyo\n"
-            "📊 股票：/stock AAPL\n"
-            "　　　　/stock 2330.TW（台股）\n"
-            "🖼 圖片：直接傳圖給我分析\n"
+            "💬 聊天：直接跟我說話就好～\n"
+            "🌤 天氣：/天氣 台北\n"
+            "📝 待辦：/待辦 買牛奶\n"
+            "　　　　/待辦 （查看清單）\n"
+            "　　　　/待辦 完成 1\n"
+            "　　　　/待辦 清空\n"
+            "🌐 翻譯：/翻譯 你好嗎\n"
+            "🍳 食譜：/食譜 雞蛋 番茄\n"
+            "💪 加油：/加油\n"
+            "🖼 圖片：直接傳圖給我～\n"
             "━━━━━━━━━━━━━━━\n"
-            "私訊也可直接對話喔！"
+            "有什麼都可以跟小愛說喔！"
         )
 
     return None  # 非指令
+
+
+def handle_todo(text: str, user_id: str) -> str:
+    """待辦事項完整處理"""
+    t = text.strip()
+    parts = t.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    todos = user_todos.setdefault(user_id, [])
+
+    # 查看清單
+    if not arg:
+        if not todos:
+            return "📝 你的待辦清單是空的喔～\n要新增的話輸入 /待辦 事項內容"
+        lines = [f"{'✅' if done else '⬜'} {i+1}. {item}" for i, (item, done) in enumerate(todos)]
+        return f"📝 你的待辦清單：\n{''.join(chr(10) + l for l in lines)}"
+
+    # 完成項目
+    if arg.startswith("完成 ") or arg.startswith("done "):
+        try:
+            idx = int(arg.split()[1]) - 1
+            if 0 <= idx < len(todos):
+                todos[idx] = (todos[idx][0], True)
+                return f"✅ 太棒了！「{todos[idx][0]}」完成囉～"
+            return "⚠️ 編號不對喔，用 /待辦 查看清單"
+        except (ValueError, IndexError):
+            return "⚠️ 用法：/待辦 完成 1"
+
+    # 刪除項目
+    if arg.startswith("刪除 ") or arg.startswith("del "):
+        try:
+            idx = int(arg.split()[1]) - 1
+            if 0 <= idx < len(todos):
+                removed = todos.pop(idx)
+                return f"🗑 已刪除「{removed[0]}」"
+            return "⚠️ 編號不對喔，用 /待辦 查看清單"
+        except (ValueError, IndexError):
+            return "⚠️ 用法：/待辦 刪除 1"
+
+    # 清空
+    if arg in ("清空", "clear"):
+        user_todos[user_id] = []
+        return "🗑 待辦清單已清空～"
+
+    # 新增項目
+    todos.append((arg, False))
+    return f"📝 已新增待辦：「{arg}」\n目前共 {len(todos)} 項待辦事項"
 
 # ─────────────────────────────────────────────
 # 處理文字訊息
@@ -237,6 +340,10 @@ def on_text(event: MessageEvent):
                 print(f"[DEBUG] 回覆失敗：{e}")
 
         # ── 指令優先（群組 & 私訊都支援）──
+        t = text.strip()
+        if t.startswith("/todo") or t.startswith("/待辦"):
+            reply(handle_todo(text, user_id))
+            return
         cmd_reply = handle_command(text)
         if cmd_reply:
             reply(cmd_reply)
