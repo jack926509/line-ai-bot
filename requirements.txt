@@ -3,5 +3,6 @@ uvicorn[standard]
 line-bot-sdk>=3.0.0
 anthropic
 apscheduler
+psycopg2-binary
 requests
 python-dotenv
