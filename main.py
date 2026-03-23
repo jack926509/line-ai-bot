@@ -218,6 +218,8 @@ def on_text(event: MessageEvent):
     print(f"[DEBUG] source_type={source_type}, user_id={user_id}, text={text!r}")
     mention = getattr(event.message, "mention", None)
     print(f"[DEBUG] mention={mention}, BOT_USER_ID={BOT_USER_ID!r}")
+    group_id = getattr(event.source, "group_id", None)
+    print(f"[DEBUG] group_id={group_id}")
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
