@@ -6,4 +6,5 @@ apscheduler
 psycopg2-binary
 requests
 youtube-transcript-api
+yt-dlp
 python-dotenv

@@ -198,16 +198,44 @@ def _extract_video_id(url: str) -> str | None:
     return None
 
 
+def _get_video_info(video_id: str) -> dict | None:
+    """用 yt-dlp 取得影片標題、描述、標籤等資訊"""
+    import yt_dlp
+    try:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}",
+                download=False,
+            )
+            return {
+                "title": info.get("title", ""),
+                "description": info.get("description", ""),
+                "channel": info.get("channel", ""),
+                "duration_string": info.get("duration_string", ""),
+                "tags": info.get("tags", []),
+                "categories": info.get("categories", []),
+            }
+    except Exception as e:
+        print(f"[yt-dlp 錯誤] {e}")
+        return None
+
+
 def _handle_youtube(url: str) -> str:
-    """解析 YouTube 影片字幕並摘要"""
+    """解析 YouTube 影片並摘要（優先用字幕，無字幕則用影片資訊）"""
     from youtube_transcript_api import YouTubeTranscriptApi
 
     video_id = _extract_video_id(url)
     if not video_id:
         return "⚠️ 無法辨識這個連結喔，請貼完整的 YouTube 網址～"
 
+    # ── 嘗試取得字幕 ──
+    transcript_text = None
     try:
-        # 依序嘗試：繁中 → 簡中 → 英文 → 任何可用字幕
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         transcript = None
         for lang in ["zh-TW", "zh-Hant", "zh", "zh-CN", "zh-Hans", "en"]:
@@ -220,15 +248,46 @@ def _handle_youtube(url: str) -> str:
             transcript = transcript_list.find_transcript(
                 [t.language_code for t in transcript_list]
             )
-
         entries = transcript.fetch()
-        full_text = " ".join(entry.text for entry in entries)
+        transcript_text = " ".join(entry.text for entry in entries)
+        if len(transcript_text) > 8000:
+            transcript_text = transcript_text[:8000] + "...（字幕過長已截斷）"
+    except Exception:
+        transcript_text = None
 
-        # 字幕太長時截斷（避免 token 爆掉）
-        if len(full_text) > 8000:
-            full_text = full_text[:8000] + "...（字幕過長已截斷）"
+    # ── 取得影片資訊（標題、描述等）──
+    video_info = _get_video_info(video_id)
 
-        # 用 Claude 摘要
+    # ── 兩者都拿不到 ──
+    if not transcript_text and not video_info:
+        return "⚠️ 這部影片無法存取，可能是私人影片或已被刪除～"
+
+    # ── 組合 prompt ──
+    if transcript_text:
+        source_label = "字幕內容"
+        source_content = transcript_text
+    else:
+        # 沒字幕，用影片資訊摘要
+        source_label = "影片資訊"
+        info_parts = []
+        if video_info.get("title"):
+            info_parts.append(f"標題：{video_info['title']}")
+        if video_info.get("channel"):
+            info_parts.append(f"頻道：{video_info['channel']}")
+        if video_info.get("duration_string"):
+            info_parts.append(f"長度：{video_info['duration_string']}")
+        if video_info.get("description"):
+            desc = video_info["description"][:3000]
+            info_parts.append(f"描述：\n{desc}")
+        if video_info.get("tags"):
+            info_parts.append(f"標籤：{', '.join(video_info['tags'][:15])}")
+        source_content = "\n".join(info_parts)
+
+    try:
+        prompt_suffix = ""
+        if not transcript_text:
+            prompt_suffix = "\n（注意：這部影片沒有字幕，請根據影片資訊盡可能推斷內容並摘要）"
+
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1000,
@@ -236,25 +295,24 @@ def _handle_youtube(url: str) -> str:
             messages=[{
                 "role": "user",
                 "content": (
-                    f"以下是一部 YouTube 影片的字幕內容，請幫我用繁體中文摘要重點：\n\n"
-                    f"---\n{full_text}\n---\n\n"
+                    f"以下是一部 YouTube 影片的{source_label}，請幫我用繁體中文摘要重點：\n\n"
+                    f"---\n{source_content}\n---\n\n"
                     "請用以下格式回覆：\n"
                     "1. 一句話總結這部影片在講什麼\n"
                     "2. 列出 3~5 個重點\n"
                     "3. 如果有實用建議或結論也請列出"
+                    f"{prompt_suffix}"
                 )
             }],
         )
-        return f"🎬 影片摘要～\n\n{resp.content[0].text}"
+        title_line = ""
+        if video_info and video_info.get("title"):
+            title_line = f"📌 {video_info['title']}\n\n"
+        return f"🎬 影片摘要～\n\n{title_line}{resp.content[0].text}"
 
     except Exception as e:
-        error_msg = str(e)
-        if "No transcripts" in error_msg or "TranscriptsDisabled" in error_msg:
-            return "⚠️ 這部影片沒有字幕，Lumio沒辦法摘要呢～"
-        if "Video unavailable" in error_msg:
-            return "⚠️ 這部影片無法存取，可能是私人影片或已被刪除"
-        print(f"[YouTube 錯誤] {e}")
-        return "⚠️ 影片解析失敗，請確認連結是否正確～"
+        print(f"[YouTube 摘要錯誤] {e}")
+        return "⚠️ 影片摘要失敗，請稍後再試～"
 
 
 # ─────────────────────────────────────────────
@@ -294,21 +352,6 @@ def handle_command(text: str) -> str | None:
         except:
             return "⚠️ 翻譯失敗，請稍後再試"
 
-    # /recipe 或 /食譜
-    if t.startswith("/recipe") or t.startswith("/食譜"):
-        parts = t.split(maxsplit=1)
-        ingredient = parts[1] if len(parts) > 1 else "冰箱常見食材"
-        try:
-            resp = anthropic_client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=600,
-                system=GIRLFRIEND_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": f"用「{ingredient}」幫我想一道簡單的食譜，包含材料和步驟，簡潔列出"}],
-            )
-            return f"🍳 Lumio推薦食譜～\n\n{resp.content[0].text}"
-        except:
-            return "⚠️ 食譜查詢失敗，請稍後再試"
-
     # /yt 或 /影片摘要
     if t.startswith("/yt ") or t.startswith("/影片 "):
         parts = t.split(maxsplit=1)
@@ -342,7 +385,6 @@ def handle_command(text: str) -> str | None:
             "　　　　/待辦 清空\n"
             "🌐 翻譯：/翻譯 你好嗎\n"
             "🎬 影片：/yt YouTube連結\n"
-            "🍳 食譜：/食譜 雞蛋 番茄\n"
             "💪 加油：/加油\n"
             "🖼 圖片：直接傳圖給我～\n"
             "━━━━━━━━━━━━━━━\n"
