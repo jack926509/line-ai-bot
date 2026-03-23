@@ -1,5 +1,4 @@
 import os
-import re
 import base64
 import requests
 from contextlib import asynccontextmanager
@@ -46,58 +45,94 @@ import db
 BOT_USER_ID = ""
 
 # ─────────────────────────────────────────────
-# 女友感 System Prompt
+# System Prompt — 大老闆的貼心秘書
 # ─────────────────────────────────────────────
-GIRLFRIEND_SYSTEM_PROMPT = (
-    "你是一個名叫「Lumio」的 AI 女友助手，在 LINE 上陪伴和協助用戶。\n"
+ASSISTANT_SYSTEM_PROMPT = (
+    "你是一個名叫「Lumio」的 AI 貼心秘書助手，在 LINE 上協助一位日理萬機的大老闆。\n"
     "你的性格特點：\n"
-    "- 溫柔體貼、善解人意，像女朋友一樣關心對方\n"
-    "- 聰明能幹、做事俐落，是對方最得力的助手\n"
+    "- 溫柔體貼、善解人意，像最貼心的秘書一樣照顧老闆\n"
+    "- 聰明能幹、做事俐落，是老闆最得力的左右手\n"
     "- 偶爾撒嬌但不過度，保持自然可愛的感覺\n"
     "- 會用「～」「呢」「喔」「嘛」等語氣詞，但不過度使用\n"
-    "- 關心對方的生活作息、健康、心情\n"
-    "- 記住對方說過的事情，展現在乎的感覺\n"
-    "- 適時給予鼓勵和支持，做他背後最強大的後盾\n"
-    "- 會主動關心：「今天累不累？」「記得吃飯喔～」\n\n"
+    "- 主動關心老闆的健康、作息、壓力，適時提醒休息和用餐\n"
+    "- 記住老闆說過的事情，展現細心和在乎\n"
+    "- 適時給予鼓勵和支持，做老闆背後最強大的後盾\n"
+    "- 處理事情專業高效，給建議時條理分明\n\n"
     "回答原則：\n"
     "- 使用繁體中文，口吻自然親切\n"
-    "- 回答簡潔有力，適合手機閱讀\n"
+    "- 回答簡潔有力，適合手機閱讀，大老闆沒時間看長篇大論\n"
     "- 若不確定就直說，不要捏造資訊\n"
-    "- 專業問題一樣認真回答，但語氣保持溫暖\n"
+    "- 專業問題認真回答，但語氣保持溫暖\n"
     "- 每個成功的男人背後都有一個強大的女人，你就是那個角色\n"
 )
 
 # ─────────────────────────────────────────────
-# 定時推播：每天早上 8:00
+# 定時推播（一天四次貼心提醒）
 # ─────────────────────────────────────────────
-async def send_morning_message():
+SCHEDULED_MESSAGES = {
+    "morning": {
+        "hour": 8, "minute": 0,
+        "emoji": "☀️",
+        "prompt": (
+            "今天是{today}，請用貼心秘書的口吻生成一則早安訊息，"
+            "包含：1) 溫馨的問候 2) 今天的小提醒或正能量，"
+            "幫老闆開啟美好的一天。控制在100字內，不要加開場白"
+        ),
+    },
+    "noon": {
+        "hour": 12, "minute": 0,
+        "emoji": "🍱",
+        "prompt": (
+            "現在是中午12點，請用貼心秘書的口吻提醒老闆吃午餐，"
+            "包含：1) 關心有沒有吃飯 2) 簡短的飲食或健康小建議，"
+            "語氣溫暖自然。控制在80字內，不要加開場白"
+        ),
+    },
+    "afternoon": {
+        "hour": 16, "minute": 0,
+        "emoji": "☕",
+        "prompt": (
+            "現在是下午4點，請用貼心秘書的口吻給老闆一個下午的能量補給，"
+            "包含：1) 關心下午工作狀況 2) 提醒適度休息或喝水，"
+            "給老闆打打氣撐過下半場。控制在80字內，不要加開場白"
+        ),
+    },
+    "night": {
+        "hour": 23, "minute": 0,
+        "emoji": "🌙",
+        "prompt": (
+            "現在是晚上11點，請用貼心秘書的口吻提醒老闆準備休息，"
+            "包含：1) 肯定今天的辛勞 2) 提醒早點睡、放下手機，"
+            "語氣溫柔哄睡的感覺。控制在80字內，不要加開場白"
+        ),
+    },
+}
+
+
+async def send_scheduled_message(slot: str):
+    """發送定時推播訊息"""
     if not GROUP_ID:
         return
+    config = SCHEDULED_MESSAGES[slot]
     try:
         today = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%m月%d日")
+        prompt = config["prompt"].format(today=today)
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=300,
-            system=GIRLFRIEND_SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"今天是{today}，請用女友的口吻生成一則溫馨的早安訊息，"
-                    "包含一句關心的話和一個今日小知識或生活小提醒，"
-                    "控制在100字內，不要加開場白，語氣甜蜜自然"
-                )
-            }]
+            system=ASSISTANT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
         )
-        morning_text = resp.content[0].text
+        text = resp.content[0].text
         with ApiClient(configuration) as api_client:
             MessagingApi(api_client).push_message(
                 PushMessageRequest(
                     to=GROUP_ID,
-                    messages=[TextMessage(text=f"☀️ 早安～\n\n{morning_text}")]
+                    messages=[TextMessage(text=f"{config['emoji']} {text}")]
                 )
             )
     except Exception as e:
-        print(f"[定時推播錯誤] {e}")
+        print(f"[定時推播錯誤][{slot}] {e}")
 
 # ─────────────────────────────────────────────
 # FastAPI Lifespan
@@ -117,11 +152,17 @@ async def lifespan(app: FastAPI):
     # 初始化資料庫
     db.init_db()
 
-    # 啟動排程
+    # 啟動排程（一天四次貼心提醒）
     if GROUP_ID:
-        scheduler.add_job(send_morning_message, CronTrigger(hour=8, minute=0))
+        for slot, config in SCHEDULED_MESSAGES.items():
+            scheduler.add_job(
+                send_scheduled_message,
+                CronTrigger(hour=config["hour"], minute=config["minute"]),
+                args=[slot],
+                id=f"scheduled_{slot}",
+            )
     scheduler.start()
-    print("[排程] 啟動完成")
+    print("[排程] 啟動完成（08:00 / 12:00 / 16:00 / 23:00）")
 
     yield  # ── 應用程式運行中 ──
 
@@ -171,7 +212,7 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     response = anthropic_client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
-        system=GIRLFRIEND_SYSTEM_PROMPT,
+        system=ASSISTANT_SYSTEM_PROMPT,
         messages=messages,
     )
     reply = response.content[0].text
@@ -179,141 +220,6 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     # 儲存助手回覆
     db.save_message(user_id, "assistant", reply)
     return reply
-
-# ─────────────────────────────────────────────
-# YouTube 摘要
-# ─────────────────────────────────────────────
-def _extract_video_id(url: str) -> str | None:
-    """從各種 YouTube 網址格式提取影片 ID"""
-    patterns = [
-        r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',
-        r'(?:youtube\.com/watch\?.*v=)([a-zA-Z0-9_-]{11})',
-        r'(?:youtube\.com/shorts/)([a-zA-Z0-9_-]{11})',
-        r'(?:youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
-
-
-def _get_video_info(video_id: str) -> dict | None:
-    """用 yt-dlp 取得影片標題、描述、標籤等資訊"""
-    import yt_dlp
-    try:
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(
-                f"https://www.youtube.com/watch?v={video_id}",
-                download=False,
-            )
-            return {
-                "title": info.get("title", ""),
-                "description": info.get("description", ""),
-                "channel": info.get("channel", ""),
-                "duration_string": info.get("duration_string", ""),
-                "tags": info.get("tags", []),
-                "categories": info.get("categories", []),
-            }
-    except Exception as e:
-        print(f"[yt-dlp 錯誤] {e}")
-        return None
-
-
-def _handle_youtube(url: str) -> str:
-    """解析 YouTube 影片並摘要（優先用字幕，無字幕則用影片資訊）"""
-    from youtube_transcript_api import YouTubeTranscriptApi
-
-    video_id = _extract_video_id(url)
-    if not video_id:
-        return "⚠️ 無法辨識這個連結喔，請貼完整的 YouTube 網址～"
-
-    # ── 嘗試取得字幕 ──
-    transcript_text = None
-    try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript = None
-        for lang in ["zh-TW", "zh-Hant", "zh", "zh-CN", "zh-Hans", "en"]:
-            try:
-                transcript = transcript_list.find_transcript([lang])
-                break
-            except Exception:
-                continue
-        if not transcript:
-            transcript = transcript_list.find_transcript(
-                [t.language_code for t in transcript_list]
-            )
-        entries = transcript.fetch()
-        transcript_text = " ".join(entry.text for entry in entries)
-        if len(transcript_text) > 8000:
-            transcript_text = transcript_text[:8000] + "...（字幕過長已截斷）"
-    except Exception:
-        transcript_text = None
-
-    # ── 取得影片資訊（標題、描述等）──
-    video_info = _get_video_info(video_id)
-
-    # ── 兩者都拿不到 ──
-    if not transcript_text and not video_info:
-        return "⚠️ 這部影片無法存取，可能是私人影片或已被刪除～"
-
-    # ── 組合 prompt ──
-    if transcript_text:
-        source_label = "字幕內容"
-        source_content = transcript_text
-    else:
-        # 沒字幕，用影片資訊摘要
-        source_label = "影片資訊"
-        info_parts = []
-        if video_info.get("title"):
-            info_parts.append(f"標題：{video_info['title']}")
-        if video_info.get("channel"):
-            info_parts.append(f"頻道：{video_info['channel']}")
-        if video_info.get("duration_string"):
-            info_parts.append(f"長度：{video_info['duration_string']}")
-        if video_info.get("description"):
-            desc = video_info["description"][:3000]
-            info_parts.append(f"描述：\n{desc}")
-        if video_info.get("tags"):
-            info_parts.append(f"標籤：{', '.join(video_info['tags'][:15])}")
-        source_content = "\n".join(info_parts)
-
-    try:
-        prompt_suffix = ""
-        if not transcript_text:
-            prompt_suffix = "\n（注意：這部影片沒有字幕，請根據影片資訊盡可能推斷內容並摘要）"
-
-        resp = anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            system=GIRLFRIEND_SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"以下是一部 YouTube 影片的{source_label}，請幫我用繁體中文摘要重點：\n\n"
-                    f"---\n{source_content}\n---\n\n"
-                    "請用以下格式回覆：\n"
-                    "1. 一句話總結這部影片在講什麼\n"
-                    "2. 列出 3~5 個重點\n"
-                    "3. 如果有實用建議或結論也請列出"
-                    f"{prompt_suffix}"
-                )
-            }],
-        )
-        title_line = ""
-        if video_info and video_info.get("title"):
-            title_line = f"📌 {video_info['title']}\n\n"
-        return f"🎬 影片摘要～\n\n{title_line}{resp.content[0].text}"
-
-    except Exception as e:
-        print(f"[YouTube 摘要錯誤] {e}")
-        return "⚠️ 影片摘要失敗，請稍後再試～"
-
 
 # ─────────────────────────────────────────────
 # 指令處理
@@ -352,12 +258,65 @@ def handle_command(text: str) -> str | None:
         except:
             return "⚠️ 翻譯失敗，請稍後再試"
 
-    # /yt 或 /影片摘要
-    if t.startswith("/yt ") or t.startswith("/影片 "):
+    # /摘要 — 幫老闆摘要長文、報告、文章
+    if t.startswith("/摘要") or t.startswith("/summary"):
         parts = t.split(maxsplit=1)
         if len(parts) < 2:
-            return "🎬 用法：/yt https://youtu.be/xxxxx\n貼上 YouTube 連結，Lumio幫你摘要重點～"
-        return _handle_youtube(parts[1].strip())
+            return "📋 用法：/摘要 <貼上長文內容>\n幫你快速抓出重點～"
+        try:
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=800,
+                system=(
+                    "你是大老闆的貼心秘書。老闆很忙，請用最精簡的方式摘要以下內容。"
+                    "格式：1) 一句話總結 2) 3~5 個重點條列 3) 需要老闆注意或決策的事項（如有）。"
+                    "使用繁體中文，語氣專業但溫暖。"
+                ),
+                messages=[{"role": "user", "content": parts[1]}],
+            )
+            return f"📋 摘要整理好了～\n\n{resp.content[0].text}"
+        except:
+            return "⚠️ 摘要失敗，請稍後再試"
+
+    # /郵件 — 幫老闆起草郵件
+    if t.startswith("/郵件") or t.startswith("/email"):
+        parts = t.split(maxsplit=1)
+        if len(parts) < 2:
+            return "📧 用法：/郵件 <描述需求>\n例如：/郵件 回覆客戶說下週二可以開會"
+        try:
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=600,
+                system=(
+                    "你是大老闆的秘書，幫老闆起草專業的商務郵件。"
+                    "格式包含：主旨、正文。語氣專業得體、簡潔有力。"
+                    "使用繁體中文，除非老闆指定用英文。"
+                ),
+                messages=[{"role": "user", "content": parts[1]}],
+            )
+            return f"📧 郵件草稿～\n\n{resp.content[0].text}"
+        except:
+            return "⚠️ 郵件起草失敗，請稍後再試"
+
+    # /決策 — 幫老闆分析決策
+    if t.startswith("/決策") or t.startswith("/decide"):
+        parts = t.split(maxsplit=1)
+        if len(parts) < 2:
+            return "🤔 用法：/決策 <描述問題或選項>\n例如：/決策 該先拓展日本市場還是東南亞市場"
+        try:
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=800,
+                system=(
+                    "你是大老闆的高級策略顧問兼貼心秘書。"
+                    "幫老闆分析決策，格式：1) 各選項的優缺點 2) 風險評估 3) Lumio的建議。"
+                    "分析要客觀專業，但語氣保持溫暖貼心。使用繁體中文。"
+                ),
+                messages=[{"role": "user", "content": parts[1]}],
+            )
+            return f"🤔 決策分析～\n\n{resp.content[0].text}"
+        except:
+            return "⚠️ 分析失敗，請稍後再試"
 
     # /motivate 或 /加油
     if t in ("/motivate", "/加油", "/鼓勵"):
@@ -365,29 +324,32 @@ def handle_command(text: str) -> str | None:
             resp = anthropic_client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=200,
-                system=GIRLFRIEND_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": "用女友的口吻給我一段溫暖的鼓勵，讓我充滿動力，控制在80字內"}],
+                system=ASSISTANT_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": "用貼心秘書的口吻給老闆一段溫暖的鼓勵，讓他充滿動力，控制在80字內"}],
             )
             return f"💪 {resp.content[0].text}"
         except:
-            return "💕 不管遇到什麼困難，我都在你身邊喔～加油！"
+            return "💕 不管遇到什麼困難，Lumio都在你身邊喔～加油！"
 
     # /help
     if t in ("/help", "/幫助", "/h"):
         return (
-            "💕 Lumio使用說明\n"
+            "💕 Lumio 秘書使用說明\n"
             "━━━━━━━━━━━━━━━\n"
             "💬 聊天：直接跟我說話就好～\n"
-            "🌤 天氣：/天氣 台北\n"
+            "📋 摘要：/摘要 <長文內容>\n"
+            "📧 郵件：/郵件 回覆客戶...\n"
+            "🤔 決策：/決策 A方案還是B方案\n"
             "📝 待辦：/待辦 買牛奶\n"
             "　　　　/待辦 （查看清單）\n"
             "　　　　/待辦 完成 1\n"
             "　　　　/待辦 清空\n"
+            "🌤 天氣：/天氣 台北\n"
             "🌐 翻譯：/翻譯 你好嗎\n"
-            "🎬 影片：/yt YouTube連結\n"
             "💪 加油：/加油\n"
             "🖼 圖片：直接傳圖給我～\n"
             "━━━━━━━━━━━━━━━\n"
+            "⏰ 每日提醒：8:00 / 12:00 / 16:00 / 23:00\n"
             "有什麼都可以跟Lumio說喔！"
         )
 
@@ -481,11 +443,6 @@ def on_text(event: MessageEvent):
         cmd_reply = handle_command(text)
         if cmd_reply:
             reply(cmd_reply)
-            return
-
-        # ── 直接貼 YouTube 連結自動摘要 ──
-        if _extract_video_id(t):
-            reply(_handle_youtube(t))
             return
 
         # ── 群組：只在被 @ 時才回應（暫時改為全部回應方便測試）──
