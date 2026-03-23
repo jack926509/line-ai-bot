@@ -5,4 +5,5 @@ anthropic
 apscheduler
 psycopg2-binary
 requests
+youtube-transcript-api
 python-dotenv

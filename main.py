@@ -1,4 +1,5 @@
 import os
+import re
 import base64
 import requests
 from contextlib import asynccontextmanager
@@ -180,6 +181,83 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     return reply
 
 # ─────────────────────────────────────────────
+# YouTube 摘要
+# ─────────────────────────────────────────────
+def _extract_video_id(url: str) -> str | None:
+    """從各種 YouTube 網址格式提取影片 ID"""
+    patterns = [
+        r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com/watch\?.*v=)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com/shorts/)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _handle_youtube(url: str) -> str:
+    """解析 YouTube 影片字幕並摘要"""
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    video_id = _extract_video_id(url)
+    if not video_id:
+        return "⚠️ 無法辨識這個連結喔，請貼完整的 YouTube 網址～"
+
+    try:
+        # 依序嘗試：繁中 → 簡中 → 英文 → 任何可用字幕
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        transcript = None
+        for lang in ["zh-TW", "zh-Hant", "zh", "zh-CN", "zh-Hans", "en"]:
+            try:
+                transcript = transcript_list.find_transcript([lang])
+                break
+            except Exception:
+                continue
+        if not transcript:
+            transcript = transcript_list.find_transcript(
+                [t.language_code for t in transcript_list]
+            )
+
+        entries = transcript.fetch()
+        full_text = " ".join(entry.text for entry in entries)
+
+        # 字幕太長時截斷（避免 token 爆掉）
+        if len(full_text) > 8000:
+            full_text = full_text[:8000] + "...（字幕過長已截斷）"
+
+        # 用 Claude 摘要
+        resp = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=GIRLFRIEND_SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"以下是一部 YouTube 影片的字幕內容，請幫我用繁體中文摘要重點：\n\n"
+                    f"---\n{full_text}\n---\n\n"
+                    "請用以下格式回覆：\n"
+                    "1. 一句話總結這部影片在講什麼\n"
+                    "2. 列出 3~5 個重點\n"
+                    "3. 如果有實用建議或結論也請列出"
+                )
+            }],
+        )
+        return f"🎬 影片摘要～\n\n{resp.content[0].text}"
+
+    except Exception as e:
+        error_msg = str(e)
+        if "No transcripts" in error_msg or "TranscriptsDisabled" in error_msg:
+            return "⚠️ 這部影片沒有字幕，小愛沒辦法摘要呢～"
+        if "Video unavailable" in error_msg:
+            return "⚠️ 這部影片無法存取，可能是私人影片或已被刪除"
+        print(f"[YouTube 錯誤] {e}")
+        return "⚠️ 影片解析失敗，請確認連結是否正確～"
+
+
+# ─────────────────────────────────────────────
 # 指令處理
 # ─────────────────────────────────────────────
 def handle_command(text: str) -> str | None:
@@ -190,7 +268,12 @@ def handle_command(text: str) -> str | None:
         parts = t.split()
         city  = parts[1] if len(parts) > 1 else "Taipei"
         try:
-            resp = requests.get(f"https://wttr.in/{city}?format=3&lang=zh", timeout=5)
+            resp = requests.get(
+                f"https://wttr.in/{city}?format=%l:+%c+%t&lang=zh",
+                headers={"Accept-Charset": "utf-8"},
+                timeout=5,
+            )
+            resp.encoding = "utf-8"
             return f"🌤 {resp.text.strip()}"
         except:
             return "⚠️ 無法取得天氣資訊，請稍後再試"
@@ -226,6 +309,13 @@ def handle_command(text: str) -> str | None:
         except:
             return "⚠️ 食譜查詢失敗，請稍後再試"
 
+    # /yt 或 /影片摘要
+    if t.startswith("/yt ") or t.startswith("/影片 "):
+        parts = t.split(maxsplit=1)
+        if len(parts) < 2:
+            return "🎬 用法：/yt https://youtu.be/xxxxx\n貼上 YouTube 連結，小愛幫你摘要重點～"
+        return _handle_youtube(parts[1].strip())
+
     # /motivate 或 /加油
     if t in ("/motivate", "/加油", "/鼓勵"):
         try:
@@ -251,6 +341,7 @@ def handle_command(text: str) -> str | None:
             "　　　　/待辦 完成 1\n"
             "　　　　/待辦 清空\n"
             "🌐 翻譯：/翻譯 你好嗎\n"
+            "🎬 影片：/yt YouTube連結\n"
             "🍳 食譜：/食譜 雞蛋 番茄\n"
             "💪 加油：/加油\n"
             "🖼 圖片：直接傳圖給我～\n"
@@ -348,6 +439,11 @@ def on_text(event: MessageEvent):
         cmd_reply = handle_command(text)
         if cmd_reply:
             reply(cmd_reply)
+            return
+
+        # ── 直接貼 YouTube 連結自動摘要 ──
+        if _extract_video_id(t):
+            reply(_handle_youtube(t))
             return
 
         # ── 群組：只在被 @ 時才回應（暫時改為全部回應方便測試）──
