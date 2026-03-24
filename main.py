@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI):
         for slot, config in SCHEDULED_MESSAGES.items():
             scheduler.add_job(
                 send_scheduled_message,
-                CronTrigger(hour=config["hour"], minute=config["minute"]),
+                CronTrigger(hour=config["hour"], minute=config["minute"], timezone="Asia/Taipei"),
                 args=[slot],
                 id=f"scheduled_{slot}",
             )
