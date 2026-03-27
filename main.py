@@ -1,7 +1,9 @@
 import os
+import json
 import base64
 import requests
 from contextlib import asynccontextmanager
+from duckduckgo_search import DDGS
 
 from fastapi import FastAPI, Request
 from linebot.v3 import WebhookHandler
@@ -66,6 +68,9 @@ ASSISTANT_SYSTEM_PROMPT = (
     "- 專業的事認真回答，但語氣永遠帶著溫度\n"
     "- 老闆累了就關心他，開心就替他高興，難過就陪著他\n"
     "- 不確定的事直說，絕不敷衍或捏造\n\n"
+    "【上網搜尋能力】\n"
+    "你可以上網搜尋最新資訊。當老闆問到新聞、股價、即時資訊、或任何你不確定的事實時，"
+    "主動使用搜尋工具幫老闆查詢，確保回覆的資訊是最新、最正確的。\n\n"
     "【你的信念】\n"
     "每個成功的大老闆背後，都有一個默默撐住一切的人——那就是你，Lumio。\n"
 )
@@ -199,7 +204,44 @@ async def webhook(request: Request):
     return {"status": "ok"}
 
 # ─────────────────────────────────────────────
-# Claude 對話（支援圖片）
+# 網路搜尋（DuckDuckGo，免費免 API Key）
+# ─────────────────────────────────────────────
+WEB_SEARCH_TOOL = {
+    "name": "web_search",
+    "description": (
+        "搜尋網路上的即時資訊。當老闆問到最新新聞、即時資訊、股價、"
+        "特定公司/產品/人物的近況、或任何你不確定的事實性問題時，使用這個工具。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "搜尋關鍵字（建議用英文或中文皆可）",
+            }
+        },
+        "required": ["query"],
+    },
+}
+
+
+def web_search(query: str, max_results: int = 5) -> str:
+    """用 DuckDuckGo 搜尋，回傳格式化結果"""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        if not results:
+            return "找不到相關搜尋結果。"
+        formatted = []
+        for r in results:
+            formatted.append(f"標題：{r['title']}\n摘要：{r['body']}\n來源：{r['href']}")
+        return "\n\n---\n\n".join(formatted)
+    except Exception as e:
+        return f"搜尋時發生錯誤：{e}"
+
+
+# ─────────────────────────────────────────────
+# Claude 對話（支援圖片 + 網路搜尋）
 # ─────────────────────────────────────────────
 def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     # 組合訊息內容
@@ -221,9 +263,39 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
         system=ASSISTANT_SYSTEM_PROMPT,
+        tools=[WEB_SEARCH_TOOL],
         messages=messages,
     )
-    reply = response.content[0].text
+
+    # 處理 tool use（Claude 自動判斷是否需要搜尋）
+    if response.stop_reason == "tool_use":
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "web_search":
+                search_result = web_search(block.input["query"])
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": search_result,
+                })
+
+        # 把搜尋結果送回 Claude 生成最終回覆
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=ASSISTANT_SYSTEM_PROMPT,
+            tools=[WEB_SEARCH_TOOL],
+            messages=messages,
+        )
+
+    reply = ""
+    for block in response.content:
+        if hasattr(block, "text"):
+            reply += block.text
+    reply = reply or "抱歉，我暫時無法回應，請再試一次～"
 
     # 儲存助手回覆
     db.save_message(user_id, "assistant", reply)
@@ -234,6 +306,28 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
 # ─────────────────────────────────────────────
 def handle_command(text: str) -> str | None:
     t = text.strip()
+
+    # /search 或 /搜尋 — 上網查詢
+    if t.startswith("/search") or t.startswith("/搜尋"):
+        parts = t.split(maxsplit=1)
+        if len(parts) < 2:
+            return "🔍 用法：/搜尋 <關鍵字>\n例如：/搜尋 台積電最新股價"
+        query = parts[1]
+        try:
+            search_result = web_search(query)
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=800,
+                system=(
+                    "你是大老闆的貼心秘書 Lumio。老闆請你搜尋了一些資料，"
+                    "請根據搜尋結果，用簡潔易懂的方式整理重點回覆老闆。"
+                    "使用繁體中文，語氣溫暖專業。如果搜尋結果不夠完整就如實說明。"
+                ),
+                messages=[{"role": "user", "content": f"搜尋「{query}」的結果：\n\n{search_result}\n\n請整理重點回覆。"}],
+            )
+            return f"🔍 搜尋結果整理～\n\n{resp.content[0].text}"
+        except Exception as e:
+            return f"⚠️ 搜尋失敗：{e}"
 
     # /weather 或 /天氣
     if t.startswith("/weather") or t.startswith("/天氣"):
@@ -345,6 +439,8 @@ def handle_command(text: str) -> str | None:
             "💕 Lumio 秘書使用說明\n"
             "━━━━━━━━━━━━━━━\n"
             "💬 聊天：直接跟我說話就好～\n"
+            "🔍 搜尋：/搜尋 台積電最新消息\n"
+            "　　　　（聊天中也會自動搜尋）\n"
             "📋 摘要：/摘要 <長文內容>\n"
             "📧 郵件：/郵件 回覆客戶...\n"
             "🤔 決策：/決策 A方案還是B方案\n"
