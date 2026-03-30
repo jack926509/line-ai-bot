@@ -3,7 +3,6 @@ import json
 import base64
 import requests
 from contextlib import asynccontextmanager
-from duckduckgo_search import DDGS
 
 from fastapi import FastAPI, Request
 from linebot.v3 import WebhookHandler
@@ -32,6 +31,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET       = os.getenv("LINE_CHANNEL_SECRET")
 ANTHROPIC_API_KEY         = os.getenv("ANTHROPIC_API_KEY")
 GROUP_ID                  = os.getenv("LINE_GROUP_ID", "")   # 定時推播用
+PERPLEXITY_API_KEY        = os.getenv("PERPLEXITY_API_KEY", "")  # 網路搜尋用
 
 # ─────────────────────────────────────────────
 # 初始化
@@ -225,17 +225,35 @@ WEB_SEARCH_TOOL = {
 }
 
 
-def web_search(query: str, max_results: int = 5) -> str:
-    """用 DuckDuckGo 搜尋，回傳格式化結果"""
+def web_search(query: str) -> str:
+    """用 Perplexity API 搜尋，回傳即時資訊"""
+    if not PERPLEXITY_API_KEY:
+        return "搜尋功能未設定，請在環境變數加入 PERPLEXITY_API_KEY。"
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-        if not results:
-            return "找不到相關搜尋結果。"
-        formatted = []
-        for r in results:
-            formatted.append(f"標題：{r['title']}\n摘要：{r['body']}\n來源：{r['href']}")
-        return "\n\n---\n\n".join(formatted)
+        resp = requests.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={
+                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "sonar",
+                "messages": [
+                    {"role": "system", "content": "請用繁體中文回答，提供最新、準確的資訊。附上資料來源。"},
+                    {"role": "user", "content": query},
+                ],
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        answer = data["choices"][0]["message"]["content"]
+        # 附上引用來源
+        citations = data.get("citations", [])
+        if citations:
+            sources = "\n".join(f"[{i+1}] {url}" for i, url in enumerate(citations[:3]))
+            return f"{answer}\n\n📎 參考來源：\n{sources}"
+        return answer
     except Exception as e:
         return f"搜尋時發生錯誤：{e}"
 
