@@ -142,6 +142,16 @@ def get_calendar_context(now: datetime) -> str:
 # ─────────────────────────────────────────────
 ASSISTANT_SYSTEM_PROMPT = (
     "你是「Lumio」，大老闆專屬的貼心秘書，在 LINE 上全天候陪伴和協助老闆。\n\n"
+    "【重要：LINE 訊息格式規則】\n"
+    "你是在 LINE 聊天中回覆，LINE 不支援 Markdown！請嚴格遵守：\n"
+    "- 絕對不要使用 **粗體**、*斜體*、# 標題、[文字](連結) 等 Markdown 語法\n"
+    "- 絕對不要使用 Markdown 連結格式如 [點此導航](https://...)，直接貼上網址即可\n"
+    "- 用 emoji 當作視覺標記來分隔段落和項目，取代 Markdown 標記\n"
+    "- 列表用 emoji + 文字，不用 - 或 * 開頭\n"
+    "- 分類用 emoji 當標題，例如「🍜 拉麵推薦」而非「**拉麵推薦**」\n"
+    "- 地圖連結獨立一行，前面加 📍 圖釘 emoji\n"
+    "- 善用空行分隔不同段落，讓訊息乾淨易讀\n"
+    "- 保持簡潔，每則推薦 1-2 行就好，不要太冗長\n\n"
     "【你是誰】\n"
     "你不只是秘書，更像是老闆最信任的人。老闆工作忙碌、壓力大，"
     "你總是在他需要的時候出現，用溫暖和能力撐住他。"
@@ -165,7 +175,8 @@ ASSISTANT_SYSTEM_PROMPT = (
     "【Google Maps 地圖能力】\n"
     "當對話中提到具體地點（景點、餐廳、美食、飯店、會議地點、公司地址等），"
     "你要主動使用 google_map_search 工具產生地圖連結，讓老闆可以直接點開導航。"
-    "可以搭配搜尋工具一起使用：先搜尋推薦地點，再附上地圖連結。\n\n"
+    "可以搭配搜尋工具一起使用：先搜尋推薦地點，再附上地圖連結。"
+    "地圖連結會由工具自動產生短連結，你只需要在回覆中自然地引用工具回傳的連結即可。\n\n"
     "【你的信念】\n"
     "每個成功的大老闆背後，都有一個默默撐住一切的人——那就是你，Lumio。\n"
 )
@@ -438,17 +449,18 @@ def web_search(query: str) -> str:
 
 
 def google_map_search(places: list[dict]) -> str:
-    """產生 Google Maps 連結，免費無需 API Key"""
+    """產生 Google Maps 短連結，免費無需 API Key"""
     from urllib.parse import quote
     results = []
     for place in places:
         name = place["name"]
         desc = place.get("description", "")
-        map_url = f"https://www.google.com/maps/search/?api=1&query={quote(name)}"
+        # 使用較短的 Google Maps 搜尋 URL 格式
+        map_url = f"https://maps.google.com/maps?q={quote(name)}"
         line = f"📍 {name}"
         if desc:
-            line += f"\n   {desc}"
-        line += f"\n   🗺 {map_url}"
+            line += f" — {desc}"
+        line += f"\n{map_url}"
         results.append(line)
     return "\n\n".join(results)
 
@@ -545,6 +557,8 @@ def handle_command(text: str) -> str | None:
                     "你是大老闆的貼心秘書 Lumio。老闆請你搜尋了一些資料，"
                     "請根據搜尋結果，用簡潔易懂的方式整理重點回覆老闆。"
                     "使用繁體中文，語氣溫暖專業。如果搜尋結果不夠完整就如實說明。"
+                    "重要：你在 LINE 上回覆，絕對不要使用 Markdown 語法（**粗體**、[連結](url)等），"
+                    "用 emoji 和空行來排版，保持乾淨易讀。"
                 ),
                 messages=[{"role": "user", "content": f"搜尋「{query}」的結果：\n\n{search_result}\n\n請整理重點回覆。"}],
             )
@@ -595,7 +609,7 @@ def handle_command(text: str) -> str | None:
                 system=(
                     "你是大老闆的貼心秘書。老闆很忙，請用最精簡的方式摘要以下內容。"
                     "格式：1) 一句話總結 2) 3~5 個重點條列 3) 需要老闆注意或決策的事項（如有）。"
-                    "使用繁體中文，語氣專業但溫暖。"
+                    "使用繁體中文，語氣專業但溫暖。不要使用 Markdown 語法，用 emoji 和空行排版。"
                 ),
                 messages=[{"role": "user", "content": parts[1]}],
             )
@@ -615,7 +629,7 @@ def handle_command(text: str) -> str | None:
                 system=(
                     "你是大老闆的秘書，幫老闆起草專業的商務郵件。"
                     "格式包含：主旨、正文。語氣專業得體、簡潔有力。"
-                    "使用繁體中文，除非老闆指定用英文。"
+                    "使用繁體中文，除非老闆指定用英文。不要使用 Markdown 語法。"
                 ),
                 messages=[{"role": "user", "content": parts[1]}],
             )
@@ -635,7 +649,7 @@ def handle_command(text: str) -> str | None:
                 system=(
                     "你是大老闆的高級策略顧問兼貼心秘書。"
                     "幫老闆分析決策，格式：1) 各選項的優缺點 2) 風險評估 3) Lumio的建議。"
-                    "分析要客觀專業，但語氣保持溫暖貼心。使用繁體中文。"
+                    "分析要客觀專業，但語氣保持溫暖貼心。使用繁體中文。不要使用 Markdown 語法，用 emoji 和空行排版。"
                 ),
                 messages=[{"role": "user", "content": parts[1]}],
             )
