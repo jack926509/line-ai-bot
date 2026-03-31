@@ -31,7 +31,6 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET       = os.getenv("LINE_CHANNEL_SECRET")
 ANTHROPIC_API_KEY         = os.getenv("ANTHROPIC_API_KEY")
 GROUP_ID                  = os.getenv("LINE_GROUP_ID", "")   # 定時推播用
-PERPLEXITY_API_KEY        = os.getenv("PERPLEXITY_API_KEY", "")  # 網路搜尋用
 
 # ─────────────────────────────────────────────
 # 初始化
@@ -362,13 +361,14 @@ WEB_SEARCH_TOOL = {
 
 def web_search(query: str) -> str:
     """用 Perplexity API 搜尋，回傳即時資訊"""
-    if not PERPLEXITY_API_KEY:
+    api_key = os.getenv("PERPLEXITY_API_KEY", "")
+    if not api_key:
         return "搜尋功能未設定，請在環境變數加入 PERPLEXITY_API_KEY。"
     try:
         resp = requests.post(
             "https://api.perplexity.ai/chat/completions",
             headers={
-                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json={
