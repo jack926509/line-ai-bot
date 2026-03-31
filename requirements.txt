@@ -6,4 +6,3 @@ apscheduler
 psycopg2-binary
 requests
 python-dotenv
-duckduckgo-search

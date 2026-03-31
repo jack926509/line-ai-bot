@@ -3,7 +3,6 @@ import json
 import base64
 import requests
 from contextlib import asynccontextmanager
-from duckduckgo_search import DDGS
 
 from fastapi import FastAPI, Request
 from linebot.v3 import WebhookHandler
@@ -32,6 +31,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET       = os.getenv("LINE_CHANNEL_SECRET")
 ANTHROPIC_API_KEY         = os.getenv("ANTHROPIC_API_KEY")
 GROUP_ID                  = os.getenv("LINE_GROUP_ID", "")   # 定時推播用
+PERPLEXITY_API_KEY        = os.getenv("PERPLEXITY_API_KEY", "")  # 網路搜尋用
 
 # ─────────────────────────────────────────────
 # 初始化
@@ -83,7 +83,8 @@ SCHEDULED_MESSAGES = {
         "hour": 8, "minute": 0,
         "emoji": "☀️",
         "prompt": (
-            "今天是{today}。你是老闆最貼心的秘書 Lumio，現在早上8點，"
+            "今天是{today}（{weekday}）。你是老闆最貼心的秘書 Lumio，現在早上8點。"
+            "{day_context}"
             "請像每天一樣溫暖地跟老闆說早安。"
             "內容包含：1) 真心的關心問候 2) 一個小提醒或正能量幫他開啟這一天。"
             "語氣自然溫柔，像是真的在乎他一樣。控制在100字內，直接說不要加開場白"
@@ -93,7 +94,8 @@ SCHEDULED_MESSAGES = {
         "hour": 12, "minute": 0,
         "emoji": "🍱",
         "prompt": (
-            "現在中午12點了。你是老闆的貼心秘書 Lumio，"
+            "今天是{today}（{weekday}）。現在中午12點了。你是老闆的貼心秘書 Lumio。"
+            "{day_context}"
             "老闆忙起來常常忘記吃飯，請溫柔地提醒他。"
             "內容包含：1) 關心他有沒有吃飯 2) 一個簡短的健康或飲食小叮嚀。"
             "語氣像是真的擔心他不吃飯的那種關心。控制在80字內，直接說不要加開場白"
@@ -103,8 +105,9 @@ SCHEDULED_MESSAGES = {
         "hour": 16, "minute": 0,
         "emoji": "☕",
         "prompt": (
-            "現在下午4點了。你是老闆的貼心秘書 Lumio，"
-            "老闆下午可能有點疲憊了，請給他一點能量和溫暖。"
+            "今天是{today}（{weekday}）。現在下午4點了。你是老闆的貼心秘書 Lumio。"
+            "{day_context}"
+            "請給老闆一點能量和溫暖。"
             "內容包含：1) 關心他下午累不累 2) 提醒喝水或稍微休息一下。"
             "語氣像是心疼他太拼，幫他打打氣。控制在80字內，直接說不要加開場白"
         ),
@@ -113,8 +116,9 @@ SCHEDULED_MESSAGES = {
         "hour": 23, "minute": 0,
         "emoji": "🌙",
         "prompt": (
-            "現在晚上11點了。你是老闆的貼心秘書 Lumio，"
-            "老闆忙了一整天，請溫柔地提醒他該休息了。"
+            "今天是{today}（{weekday}）。現在晚上11點了。你是老闆的貼心秘書 Lumio。"
+            "{day_context}"
+            "請溫柔地提醒老闆該休息了。"
             "內容包含：1) 肯定他今天的辛苦和付出 2) 溫柔催他放下手機早點睡。"
             "語氣要像哄他入睡一樣溫柔。控制在80字內，直接說不要加開場白"
         ),
@@ -128,8 +132,20 @@ async def send_scheduled_message(slot: str):
         return
     config = SCHEDULED_MESSAGES[slot]
     try:
-        today = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%m月%d日")
-        prompt = config["prompt"].format(today=today)
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        today = now.strftime("%m月%d日")
+        weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+        weekday = weekday_names[now.weekday()]
+        is_weekend = now.weekday() >= 5  # 5=六, 6=日
+        if is_weekend:
+            day_context = "今天是週末，老闆難得可以放鬆一下，語氣可以更輕鬆愉快，鼓勵他好好休息享受生活。"
+        elif now.weekday() == 0:
+            day_context = "今天是週一，新的一週開始了，幫老闆打打氣迎接新的挑戰。"
+        elif now.weekday() == 4:
+            day_context = "今天是週五，撐過這天就是週末了，幫老闆加油打氣！"
+        else:
+            day_context = ""
+        prompt = config["prompt"].format(today=today, weekday=weekday, day_context=day_context)
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=300,
@@ -225,17 +241,35 @@ WEB_SEARCH_TOOL = {
 }
 
 
-def web_search(query: str, max_results: int = 5) -> str:
-    """用 DuckDuckGo 搜尋，回傳格式化結果"""
+def web_search(query: str) -> str:
+    """用 Perplexity API 搜尋，回傳即時資訊"""
+    if not PERPLEXITY_API_KEY:
+        return "搜尋功能未設定，請在環境變數加入 PERPLEXITY_API_KEY。"
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-        if not results:
-            return "找不到相關搜尋結果。"
-        formatted = []
-        for r in results:
-            formatted.append(f"標題：{r['title']}\n摘要：{r['body']}\n來源：{r['href']}")
-        return "\n\n---\n\n".join(formatted)
+        resp = requests.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={
+                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "sonar",
+                "messages": [
+                    {"role": "system", "content": "請用繁體中文回答，提供最新、準確的資訊。附上資料來源。"},
+                    {"role": "user", "content": query},
+                ],
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        answer = data["choices"][0]["message"]["content"]
+        # 附上引用來源
+        citations = data.get("citations", [])
+        if citations:
+            sources = "\n".join(f"[{i+1}] {url}" for i, url in enumerate(citations[:3]))
+            return f"{answer}\n\n📎 參考來源：\n{sources}"
+        return answer
     except Exception as e:
         return f"搜尋時發生錯誤：{e}"
 
