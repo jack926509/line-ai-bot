@@ -42,8 +42,69 @@ scheduler     = AsyncIOScheduler(timezone="Asia/Taipei")
 
 import db
 
+# Google Calendar
+from google.oauth2 import service_account
+from googleapiclient.discovery import build as build_gcal
+
 # Bot 自己的 userId（群組判斷 mention 用）
 BOT_USER_ID = ""
+
+
+# ─────────────────────────────────────────────
+# Google Calendar（免費 API，使用 Service Account）
+# ─────────────────────────────────────────────
+def get_gcal_service():
+    """取得 Google Calendar API 服務（使用 Service Account）"""
+    creds_json = os.getenv("GOOGLE_CALENDAR_CREDENTIALS", "")
+    if not creds_json:
+        return None
+    try:
+        info = json.loads(creds_json)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/calendar.readonly"]
+        )
+        return build_gcal("calendar", "v3", credentials=creds)
+    except Exception as e:
+        print(f"[Google Calendar] 初始化失敗：{e}")
+        return None
+
+
+def get_today_events() -> str:
+    """取得今天的 Google Calendar 行程"""
+    service = get_gcal_service()
+    calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+    if not service:
+        return ""
+    try:
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        start = now.replace(hour=0, minute=0, second=0).isoformat()
+        end = now.replace(hour=23, minute=59, second=59).isoformat()
+        result = service.events().list(
+            calendarId=calendar_id,
+            timeMin=start, timeMax=end,
+            singleEvents=True, orderBy="startTime",
+            timeZone="Asia/Taipei",
+        ).execute()
+        events = result.get("items", [])
+        if not events:
+            return "📅 今天沒有行程安排"
+        lines = ["📅 今日行程："]
+        for ev in events:
+            s = ev["start"].get("dateTime", ev["start"].get("date", ""))
+            title = ev.get("summary", "（無標題）")
+            location = ev.get("location", "")
+            if "T" in s:
+                time_str = datetime.fromisoformat(s).strftime("%H:%M")
+                line = f"  ⏰ {time_str} {title}"
+            else:
+                line = f"  📌 整天 {title}"
+            if location:
+                line += f"\n     📍 {location}"
+            lines.append(line)
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"[Google Calendar] 取得行程失敗：{e}")
+        return ""
 
 # ─────────────────────────────────────────────
 # 台灣日曆（國定假日 + 節慶 + 節氣）
@@ -177,6 +238,9 @@ ASSISTANT_SYSTEM_PROMPT = (
     "你要主動使用 google_map_search 工具產生地圖連結，讓老闆可以直接點開導航。"
     "可以搭配搜尋工具一起使用：先搜尋推薦地點，再附上地圖連結。"
     "地圖連結會由工具自動產生短連結，你只需要在回覆中自然地引用工具回傳的連結即可。\n\n"
+    "【Google Calendar 行程能力】\n"
+    "你可以查看老闆的 Google Calendar 行程。每天早安晨報會自動整合今日行程。"
+    "老闆問「今天有什麼會」「明天行程」時，如果有日曆資訊就直接回覆。\n\n"
     "【你的信念】\n"
     "每個成功的大老闆背後，都有一個默默撐住一切的人——那就是你，Lumio。\n"
 )
@@ -208,17 +272,7 @@ def build_system_prompt() -> str:
 # 定時推播（一天四次貼心提醒）
 # ─────────────────────────────────────────────
 SCHEDULED_MESSAGES = {
-    "morning": {
-        "hour": 8, "minute": 0,
-        "emoji": "☀️",
-        "prompt": (
-            "今天是{today}（{weekday}）。你是老闆最貼心的秘書 Lumio，現在早上8點。"
-            "{day_context}"
-            "請像每天一樣溫暖地跟老闆說早安。"
-            "內容包含：1) 真心的關心問候 2) 一個小提醒或正能量幫他開啟這一天。"
-            "語氣自然溫柔，像是真的在乎他一樣。控制在100字內，直接說不要加開場白"
-        ),
-    },
+    # morning 改為 send_morning_briefing()，整合晨報
     "noon": {
         "hour": 12, "minute": 0,
         "emoji": "🍱",
@@ -255,8 +309,82 @@ SCHEDULED_MESSAGES = {
 }
 
 
+def _get_day_context(now: datetime) -> str:
+    """產生星期 + 節日語境"""
+    is_weekend = now.weekday() >= 5
+    if is_weekend:
+        hint = "今天是週末，老闆難得可以放鬆一下，語氣可以更輕鬆愉快，鼓勵他好好休息享受生活。"
+    elif now.weekday() == 0:
+        hint = "今天是週一，新的一週開始了，幫老闆打打氣迎接新的挑戰。"
+    elif now.weekday() == 4:
+        hint = "今天是週五，撐過這天就是週末了，幫老闆加油打氣！"
+    else:
+        hint = ""
+    return hint + get_calendar_context(now)
+
+
+async def send_morning_briefing():
+    """早安晨報：行程 + 天氣 + 待辦 + 節日 + 問候"""
+    if not GROUP_ID:
+        return
+    try:
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        today = now.strftime("%m月%d日")
+        weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+        weekday = weekday_names[now.weekday()]
+
+        # 收集資訊
+        calendar_events = get_today_events()
+        weather = ""
+        try:
+            r = requests.get("https://wttr.in/Taipei?format=%c+%t&lang=zh", timeout=5)
+            r.encoding = "utf-8"
+            weather = f"🌤 台北天氣：{r.text.strip()}"
+        except:
+            pass
+
+        # 到期待辦
+        due_todos = db.get_due_todos()
+        todo_text = ""
+        if due_todos:
+            lines = []
+            for uid, content, due in due_todos:
+                tag = "⚠️ 今天到期" if str(due) == str(now.date()) else "📌 明天到期"
+                lines.append(f"  {tag} {content}")
+            todo_text = "📝 待辦提醒：\n" + "\n".join(lines)
+
+        day_context = _get_day_context(now)
+
+        briefing_data = "\n\n".join(filter(None, [calendar_events, weather, todo_text]))
+
+        prompt = (
+            f"今天是{today}（{weekday}）早上8點。{day_context}\n"
+            f"以下是今天的資訊：\n{briefing_data}\n\n"
+            "你是老闆的貼心秘書 Lumio，請幫老闆整理一份簡潔的早安晨報。"
+            "格式：先溫暖問候一句，然後列出今日重點（行程、天氣、待辦提醒）。"
+            "如果沒有行程就不用提行程，沒有待辦就不用提待辦。"
+            "最後加一句正能量鼓勵。控制在 200 字內，不要使用 Markdown。"
+        )
+        resp = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            system=ASSISTANT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).push_message(
+                PushMessageRequest(
+                    to=GROUP_ID,
+                    messages=[TextMessage(text=f"☀️ {text}")]
+                )
+            )
+    except Exception as e:
+        print(f"[晨報推播錯誤] {e}")
+
+
 async def send_scheduled_message(slot: str):
-    """發送定時推播訊息"""
+    """發送定時推播訊息（午餐/下午/晚安）"""
     if not GROUP_ID:
         return
     config = SCHEDULED_MESSAGES[slot]
@@ -265,21 +393,7 @@ async def send_scheduled_message(slot: str):
         today = now.strftime("%m月%d日")
         weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
         weekday = weekday_names[now.weekday()]
-        is_weekend = now.weekday() >= 5  # 5=六, 6=日
-        # 星期語境
-        if is_weekend:
-            weekday_hint = "今天是週末，老闆難得可以放鬆一下，語氣可以更輕鬆愉快，鼓勵他好好休息享受生活。"
-        elif now.weekday() == 0:
-            weekday_hint = "今天是週一，新的一週開始了，幫老闆打打氣迎接新的挑戰。"
-        elif now.weekday() == 4:
-            weekday_hint = "今天是週五，撐過這天就是週末了，幫老闆加油打氣！"
-        else:
-            weekday_hint = ""
-
-        # 日曆節日語境
-        calendar_hint = get_calendar_context(now)
-
-        day_context = weekday_hint + calendar_hint
+        day_context = _get_day_context(now)
         prompt = config["prompt"].format(today=today, weekday=weekday, day_context=day_context)
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -297,6 +411,31 @@ async def send_scheduled_message(slot: str):
             )
     except Exception as e:
         print(f"[定時推播錯誤][{slot}] {e}")
+
+
+async def check_due_reminders():
+    """檢查待辦到期提醒（每天 09:00 和 20:00 執行）"""
+    if not GROUP_ID:
+        return
+    try:
+        due_todos = db.get_due_todos()
+        if not due_todos:
+            return
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        lines = []
+        for uid, content, due in due_todos:
+            tag = "🔴 今天到期" if str(due) == str(now.date()) else "🟡 明天到期"
+            lines.append(f"{tag} {content}")
+        msg = "📝 待辦到期提醒！\n\n" + "\n".join(lines) + "\n\n記得處理喔～ 💪"
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).push_message(
+                PushMessageRequest(
+                    to=GROUP_ID,
+                    messages=[TextMessage(text=msg)]
+                )
+            )
+    except Exception as e:
+        print(f"[待辦提醒錯誤] {e}")
 
 # ─────────────────────────────────────────────
 # FastAPI Lifespan
@@ -316,17 +455,32 @@ async def lifespan(app: FastAPI):
     # 初始化資料庫
     db.init_db()
 
-    # 啟動排程（一天四次貼心提醒）
+    # 啟動排程
     if GROUP_ID:
-        for slot, config in SCHEDULED_MESSAGES.items():
+        # 08:00 早安晨報（整合行程 + 天氣 + 待辦）
+        scheduler.add_job(
+            send_morning_briefing,
+            CronTrigger(hour=8, minute=0, timezone="Asia/Taipei"),
+            id="morning_briefing",
+        )
+        # 12:00 / 16:00 / 23:00 定時推播
+        for slot in ("noon", "afternoon", "night"):
+            config = SCHEDULED_MESSAGES[slot]
             scheduler.add_job(
                 send_scheduled_message,
                 CronTrigger(hour=config["hour"], minute=config["minute"], timezone="Asia/Taipei"),
                 args=[slot],
                 id=f"scheduled_{slot}",
             )
+        # 09:00 / 20:00 待辦到期提醒
+        for h in (9, 20):
+            scheduler.add_job(
+                check_due_reminders,
+                CronTrigger(hour=h, minute=0, timezone="Asia/Taipei"),
+                id=f"due_reminder_{h}",
+            )
     scheduler.start()
-    print("[排程] 啟動完成（08:00 / 12:00 / 16:00 / 23:00）")
+    print("[排程] 啟動完成（晨報 08:00 / 推播 12:00+16:00+23:00 / 到期提醒 09:00+20:00）")
 
     yield  # ── 應用程式運行中 ──
 
@@ -542,6 +696,10 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
 def handle_command(text: str) -> str | None:
     t = text.strip()
 
+    # /行程 — 行程規劃
+    if t.startswith("/行程") or t.startswith("/trip"):
+        return handle_trip(text)
+
     # /search 或 /搜尋 — 上網查詢
     if t.startswith("/search") or t.startswith("/搜尋"):
         parts = t.split(maxsplit=1)
@@ -678,21 +836,27 @@ def handle_command(text: str) -> str | None:
             "💬 聊天：直接跟我說話就好～\n"
             "🔍 搜尋：/搜尋 台積電最新消息\n"
             "📍 地圖：聊天提到地點自動附地圖\n"
-            "　　　　（搜尋＆地圖聊天中自動觸發）\n"
+            "🧳 行程：/行程 東京出差3天\n"
+            "━━━━━━━━━━━━━━━\n"
+            "📝 待辦：/待辦 買牛奶\n"
+            "　　　　/待辦 #工作 4/5 準備簡報\n"
+            "　　　　/待辦 #私人 明天 看牙醫\n"
+            "　　　　/待辦 完成 1 ｜ /待辦 清空\n"
+            "📒 記事：/記事 客戶預算500萬\n"
+            "　　　　/記事（查看）｜ /記事 刪除 1\n"
+            "━━━━━━━━━━━━━━━\n"
             "📋 摘要：/摘要 <長文內容>\n"
             "📧 郵件：/郵件 回覆客戶...\n"
             "🤔 決策：/決策 A方案還是B方案\n"
-            "📝 待辦：/待辦 買牛奶\n"
-            "　　　　/待辦 （查看清單）\n"
-            "　　　　/待辦 完成 1\n"
-            "　　　　/待辦 清空\n"
             "🌤 天氣：/天氣 台北\n"
             "🌐 翻譯：/翻譯 你好嗎\n"
             "💪 加油：/加油\n"
             "🔄 清除記憶：/清除記憶\n"
             "🖼 圖片：直接傳圖給我～\n"
             "━━━━━━━━━━━━━━━\n"
-            "⏰ 每日提醒：8:00 / 12:00 / 16:00 / 23:00\n"
+            "☀️ 早安晨報：08:00（行程+天氣+待辦）\n"
+            "⏰ 定時關心：12:00 / 16:00 / 23:00\n"
+            "📝 到期提醒：09:00 / 20:00\n"
             "有什麼都可以跟Lumio說喔！"
         )
 
@@ -705,8 +869,49 @@ def handle_reset_memory(user_id: str) -> str:
     return "🔄 對話記憶已清除～\nLumio 會重新認識你，但待辦事項不會受影響喔！"
 
 
+def _parse_todo_input(text: str) -> tuple[str, str, str | None]:
+    """解析待辦輸入，支援分類和到期日
+    格式：/待辦 [#分類] [日期] 內容
+    例如：/待辦 #工作 4/5 準備董事會簡報
+          /待辦 #私人 買生日禮物
+          /待辦 明天 交報告
+    """
+    import re
+    content = text
+    category = "一般"
+    due_date = None
+
+    # 提取分類 #xxx
+    cat_match = re.match(r"#(\S+)\s+", content)
+    if cat_match:
+        category = cat_match.group(1)
+        content = content[cat_match.end():]
+
+    # 提取日期
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    if content.startswith("今天 "):
+        due_date = now.strftime("%Y-%m-%d")
+        content = content[3:]
+    elif content.startswith("明天 "):
+        due_date = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        content = content[3:]
+    elif content.startswith("後天 "):
+        due_date = (now + timedelta(days=2)).strftime("%Y-%m-%d")
+        content = content[3:]
+    else:
+        # 嘗試匹配 M/D 格式
+        date_match = re.match(r"(\d{1,2})/(\d{1,2})\s+", content)
+        if date_match:
+            m, d = int(date_match.group(1)), int(date_match.group(2))
+            year = now.year if m >= now.month else now.year + 1
+            due_date = f"{year}-{m:02d}-{d:02d}"
+            content = content[date_match.end():]
+
+    return content.strip(), category, due_date
+
+
 def handle_todo(text: str, user_id: str) -> str:
-    """待辦事項完整處理（SQLite 持久化）"""
+    """待辦事項完整處理（支援分類 + 到期日）"""
     t = text.strip()
     parts = t.split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 else ""
@@ -715,12 +920,35 @@ def handle_todo(text: str, user_id: str) -> str:
     if not arg:
         todos = db.get_todos(user_id)
         if not todos:
-            return "📝 你的待辦清單是空的喔～\n要新增的話輸入 /待辦 事項內容"
+            return (
+                "📝 待辦清單是空的喔～\n\n"
+                "新增方式：\n"
+                "  /待辦 買牛奶\n"
+                "  /待辦 #工作 4/5 準備簡報\n"
+                "  /待辦 #私人 明天 看牙醫"
+            )
         lines = []
-        for i, (_id, content, done) in enumerate(todos, 1):
+        current_cat = None
+        for i, (_id, content, done, category, due_date) in enumerate(todos, 1):
+            if category != current_cat:
+                current_cat = category
+                lines.append(f"\n📂 {category}")
             mark = "✅" if done else "⬜"
-            lines.append(f"{mark} {i}. {content}")
-        return "📝 你的待辦清單：\n" + "\n".join(lines)
+            due_str = ""
+            if due_date:
+                now = datetime.now(ZoneInfo("Asia/Taipei")).date()
+                d = due_date if hasattr(due_date, 'year') else datetime.strptime(str(due_date), "%Y-%m-%d").date()
+                diff = (d - now).days
+                if diff < 0:
+                    due_str = " 🔴已過期"
+                elif diff == 0:
+                    due_str = " 🔴今天"
+                elif diff == 1:
+                    due_str = " 🟡明天"
+                else:
+                    due_str = f" 📅{d.month}/{d.day}"
+            lines.append(f"  {mark} {i}. {content}{due_str}")
+        return "📝 待辦清單：" + "\n".join(lines)
 
     # 完成項目
     if arg.startswith("完成 ") or arg.startswith("done "):
@@ -749,9 +977,92 @@ def handle_todo(text: str, user_id: str) -> str:
         db.clear_todos(user_id)
         return "🗑 待辦清單已清空～"
 
-    # 新增項目
-    count = db.add_todo(user_id, arg)
-    return f"📝 已新增待辦：「{arg}」\n目前共 {count} 項待辦事項"
+    # 新增項目（支援分類 + 到期日）
+    content, category, due_date = _parse_todo_input(arg)
+    count = db.add_todo(user_id, content, category=category, due_date=due_date)
+    result = f"📝 已新增待辦：「{content}」"
+    if category != "一般":
+        result += f"\n📂 分類：{category}"
+    if due_date:
+        result += f"\n📅 到期：{due_date}"
+    result += f"\n目前共 {count} 項待辦事項"
+    return result
+
+def handle_note(text: str, user_id: str) -> str:
+    """快速記事 / 備忘錄"""
+    t = text.strip()
+    parts = t.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    # 查看筆記
+    if not arg:
+        notes = db.get_notes(user_id)
+        if not notes:
+            return "📒 備忘錄是空的喔～\n用法：/記事 客戶說預算上限500萬"
+        lines = ["📒 最近的備忘錄："]
+        for i, (_id, content, created_at) in enumerate(notes, 1):
+            time_str = created_at.strftime("%m/%d %H:%M") if hasattr(created_at, 'strftime') else str(created_at)[:16]
+            lines.append(f"  {i}. {content}\n     🕐 {time_str}")
+        return "\n".join(lines)
+
+    # 刪除
+    if arg.startswith("刪除 ") or arg.startswith("del "):
+        try:
+            idx = int(arg.split()[1])
+            name = db.delete_note(user_id, idx)
+            if name:
+                return f"🗑 已刪除備忘：「{name}」"
+            return "⚠️ 編號不對喔，用 /記事 查看清單"
+        except (ValueError, IndexError):
+            return "⚠️ 用法：/記事 刪除 1"
+
+    # 清空
+    if arg in ("清空", "clear"):
+        db.clear_notes(user_id)
+        return "🗑 備忘錄已清空～"
+
+    # 新增
+    count = db.add_note(user_id, arg)
+    return f"📒 已記下：「{arg}」\n目前共 {count} 則備忘"
+
+
+def handle_trip(text: str) -> str:
+    """行程規劃助手"""
+    t = text.strip()
+    parts = t.split(maxsplit=1)
+    if len(parts) < 2:
+        return (
+            "🧳 行程規劃助手\n\n"
+            "用法：/行程 <描述你的旅行需求>\n\n"
+            "範例：\n"
+            "  /行程 下週去東京出差3天\n"
+            "  /行程 週末台南兩天一夜美食之旅\n"
+            "  /行程 福岡5天4夜親子遊"
+        )
+    query = parts[1]
+    try:
+        # 先用 Perplexity 搜尋旅遊資訊
+        search_result = web_search(f"{query} 行程推薦 景點美食")
+        resp = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1500,
+            system=(
+                "你是大老闆的貼心秘書 Lumio，老闆要你幫忙規劃行程。"
+                "請根據搜尋結果，整理出一份完整的行程表。\n"
+                "格式要求：\n"
+                "1. 按天數分段（Day 1、Day 2...）\n"
+                "2. 每個時段標註時間和地點\n"
+                "3. 包含景點、餐廳推薦\n"
+                "4. 最後附上實用小提醒（交通、天氣、注意事項）\n"
+                "重要：不要使用 Markdown 語法，用 emoji 和空行排版。"
+                "語氣溫暖專業，像是真的幫老闆安排好了一切。"
+            ),
+            messages=[{"role": "user", "content": f"幫我規劃：{query}\n\n參考資訊：\n{search_result}"}],
+        )
+        return f"🧳 行程規劃好了～\n\n{resp.content[0].text}"
+    except Exception as e:
+        return f"⚠️ 行程規劃失敗：{e}"
+
 
 # ─────────────────────────────────────────────
 # 處理文字訊息
@@ -791,6 +1102,9 @@ def on_text(event: MessageEvent):
             return
         if t.startswith("/todo") or t.startswith("/待辦"):
             reply(handle_todo(text, user_id))
+            return
+        if t.startswith("/note") or t.startswith("/記事") or t.startswith("/備忘"):
+            reply(handle_note(text, user_id))
             return
         cmd_reply = handle_command(text)
         if cmd_reply:
