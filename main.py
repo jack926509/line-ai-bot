@@ -162,6 +162,10 @@ ASSISTANT_SYSTEM_PROMPT = (
     "【上網搜尋能力】\n"
     "你可以上網搜尋最新資訊。當老闆問到新聞、股價、即時資訊、或任何你不確定的事實時，"
     "主動使用搜尋工具幫老闆查詢，確保回覆的資訊是最新、最正確的。\n\n"
+    "【Google Maps 地圖能力】\n"
+    "當對話中提到具體地點（景點、餐廳、美食、飯店、會議地點、公司地址等），"
+    "你要主動使用 google_map_search 工具產生地圖連結，讓老闆可以直接點開導航。"
+    "可以搭配搜尋工具一起使用：先搜尋推薦地點，再附上地圖連結。\n\n"
     "【你的信念】\n"
     "每個成功的大老闆背後，都有一個默默撐住一切的人——那就是你，Lumio。\n"
 )
@@ -340,7 +344,7 @@ async def webhook(request: Request):
     return {"status": "ok"}
 
 # ─────────────────────────────────────────────
-# 網路搜尋（DuckDuckGo，免費免 API Key）
+# 網路搜尋（Perplexity API）
 # ─────────────────────────────────────────────
 WEB_SEARCH_TOOL = {
     "name": "web_search",
@@ -359,6 +363,44 @@ WEB_SEARCH_TOOL = {
         "required": ["query"],
     },
 }
+
+# ─────────────────────────────────────────────
+# Google Maps 地點查詢（免費，無需 API Key）
+# ─────────────────────────────────────────────
+GOOGLE_MAP_TOOL = {
+    "name": "google_map_search",
+    "description": (
+        "查詢地點並產生 Google Maps 連結。當對話中提到具體地點、景點、餐廳、"
+        "美食、飯店、會議地點、公司地址等，使用這個工具提供地圖連結，"
+        "讓老闆可以直接點開導航。可以一次查詢多個地點。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "places": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "地點名稱（盡量具體，例如「博多一幸舍 福岡總本店」而非「拉麵店」）",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "簡短描述這個地點（例如「濃厚豚骨拉麵名店」）",
+                        },
+                    },
+                    "required": ["name"],
+                },
+                "description": "要查詢的地點列表",
+            }
+        },
+        "required": ["places"],
+    },
+}
+
+TOOLS = [WEB_SEARCH_TOOL, GOOGLE_MAP_TOOL]
 
 
 def web_search(query: str) -> str:
@@ -395,8 +437,24 @@ def web_search(query: str) -> str:
         return f"搜尋時發生錯誤：{e}"
 
 
+def google_map_search(places: list[dict]) -> str:
+    """產生 Google Maps 連結，免費無需 API Key"""
+    from urllib.parse import quote
+    results = []
+    for place in places:
+        name = place["name"]
+        desc = place.get("description", "")
+        map_url = f"https://www.google.com/maps/search/?api=1&query={quote(name)}"
+        line = f"📍 {name}"
+        if desc:
+            line += f"\n   {desc}"
+        line += f"\n   🗺 {map_url}"
+        results.append(line)
+    return "\n\n".join(results)
+
+
 # ─────────────────────────────────────────────
-# Claude 對話（支援圖片 + 網路搜尋）
+# Claude 對話（支援圖片 + 網路搜尋 + 地圖）
 # ─────────────────────────────────────────────
 def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     # 組合訊息內容
@@ -420,23 +478,31 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
         system=system_prompt,
-        tools=[WEB_SEARCH_TOOL],
+        tools=TOOLS,
         messages=messages,
     )
 
-    # 處理 tool use（Claude 自動判斷是否需要搜尋）
-    if response.stop_reason == "tool_use":
+    # 處理 tool use（最多 3 輪，支援搜尋 + 地圖連續呼叫）
+    for _ in range(3):
+        if response.stop_reason != "tool_use":
+            break
+
         tool_results = []
         for block in response.content:
-            if block.type == "tool_use" and block.name == "web_search":
-                search_result = web_search(block.input["query"])
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": search_result,
-                })
+            if block.type != "tool_use":
+                continue
+            if block.name == "web_search":
+                result = web_search(block.input["query"])
+            elif block.name == "google_map_search":
+                result = google_map_search(block.input["places"])
+            else:
+                result = "未知的工具"
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result,
+            })
 
-        # 把搜尋結果送回 Claude 生成最終回覆
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
 
@@ -444,7 +510,7 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
             model="claude-sonnet-4-20250514",
             max_tokens=1000,
             system=system_prompt,
-            tools=[WEB_SEARCH_TOOL],
+            tools=TOOLS,
             messages=messages,
         )
 
@@ -597,7 +663,8 @@ def handle_command(text: str) -> str | None:
             "━━━━━━━━━━━━━━━\n"
             "💬 聊天：直接跟我說話就好～\n"
             "🔍 搜尋：/搜尋 台積電最新消息\n"
-            "　　　　（聊天中也會自動搜尋）\n"
+            "📍 地圖：聊天提到地點自動附地圖\n"
+            "　　　　（搜尋＆地圖聊天中自動觸發）\n"
             "📋 摘要：/摘要 <長文內容>\n"
             "📧 郵件：/郵件 回覆客戶...\n"
             "🤔 決策：/決策 A方案還是B方案\n"
