@@ -130,6 +130,13 @@ def save_message(user_id: str, role: str, content) -> None:
         """, (user_id, user_id, MAX_HISTORY))
 
 
+def clear_history(user_id: str):
+    """清除指定用戶的對話記憶"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM conversations WHERE user_id = %s", (user_id,))
+
+
 def get_history(user_id: str) -> list[dict]:
     """取得對話歷史，格式與 Claude API 相容"""
     with get_db() as conn:

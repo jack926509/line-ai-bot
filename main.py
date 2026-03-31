@@ -178,8 +178,10 @@ def build_system_prompt() -> str:
     calendar_info = get_calendar_context(now)
 
     date_block = (
-        f"【現在時間】\n"
-        f"現在是台灣時間 {date_str}（{weekday}）{time_str}。\n"
+        f"【重要：現在時間】\n"
+        f"今天是 {date_str}（{weekday}），現在台灣時間 {time_str}。\n"
+        f"你一定知道今天的日期，當老闆問你今天幾月幾號、星期幾、現在幾點，"
+        f"請直接自信地回答：今天是{now.month}月{now.day}日，{weekday}。\n"
     )
     if calendar_info:
         date_block += f"{calendar_info}\n"
@@ -606,6 +608,7 @@ def handle_command(text: str) -> str | None:
             "🌤 天氣：/天氣 台北\n"
             "🌐 翻譯：/翻譯 你好嗎\n"
             "💪 加油：/加油\n"
+            "🔄 清除記憶：/清除記憶\n"
             "🖼 圖片：直接傳圖給我～\n"
             "━━━━━━━━━━━━━━━\n"
             "⏰ 每日提醒：8:00 / 12:00 / 16:00 / 23:00\n"
@@ -613,6 +616,12 @@ def handle_command(text: str) -> str | None:
         )
 
     return None  # 非指令
+
+
+def handle_reset_memory(user_id: str) -> str:
+    """清除對話記憶"""
+    db.clear_history(user_id)
+    return "🔄 對話記憶已清除～\nLumio 會重新認識你，但待辦事項不會受影響喔！"
 
 
 def handle_todo(text: str, user_id: str) -> str:
@@ -696,6 +705,9 @@ def on_text(event: MessageEvent):
 
         # ── 指令優先（群組 & 私訊都支援）──
         t = text.strip()
+        if t in ("/清除記憶", "/reset", "/清除"):
+            reply(handle_reset_memory(user_id))
+            return
         if t.startswith("/todo") or t.startswith("/待辦"):
             reply(handle_todo(text, user_id))
             return
