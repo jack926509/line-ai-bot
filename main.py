@@ -18,7 +18,7 @@ from linebot.v3.exceptions import InvalidSignatureError
 from anthropic import Anthropic
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
@@ -45,6 +45,98 @@ import db
 
 # Bot 自己的 userId（群組判斷 mention 用）
 BOT_USER_ID = ""
+
+# ─────────────────────────────────────────────
+# 台灣日曆（國定假日 + 節慶 + 節氣）
+# ─────────────────────────────────────────────
+# 固定日期節日（每年相同）
+FIXED_HOLIDAYS = {
+    (1, 1):   "元旦，新年新氣象！",
+    (1, 2):   "元旦連假",
+    (1, 3):   "元旦連假",
+    (2, 14):  "情人節 💕",
+    (2, 28):  "和平紀念日",
+    (3, 8):   "國際婦女節",
+    (3, 12):  "植樹節",
+    (3, 14):  "白色情人節",
+    (3, 29):  "青年節",
+    (4, 1):   "愚人節",
+    (4, 4):   "兒童節",
+    (4, 5):   "清明節",
+    (5, 1):   "勞動節，辛苦的勞工們放假一天！",
+    (6, 20):  "夏至",
+    (7, 15):  "世界青年技能日",
+    (8, 8):   "父親節，記得跟爸爸說聲節日快樂！",
+    (9, 3):   "軍人節",
+    (9, 28):  "教師節，感謝老師的教導！",
+    (10, 10): "國慶日 🇹🇼",
+    (10, 31): "萬聖節 🎃",
+    (11, 11): "光棍節 / 雙十一購物節",
+    (12, 21): "冬至",
+    (12, 24): "平安夜 🎄",
+    (12, 25): "聖誕節 🎄",
+    (12, 31): "跨年夜，準備迎接新的一年！",
+}
+
+# 農曆 / 浮動假日（每年需更新，以下為 2025-2026 年）
+FLOATING_HOLIDAYS = {
+    # ── 2025 ──
+    (2025, 1, 27): "除夕前一天，準備圍爐囉！",
+    (2025, 1, 28): "除夕，團圓夜！🧨",
+    (2025, 1, 29): "春節初一，新年快樂！🧧",
+    (2025, 1, 30): "春節初二，回娘家",
+    (2025, 1, 31): "春節初三",
+    (2025, 2, 1):  "春節假期",
+    (2025, 2, 2):  "春節假期最後一天",
+    (2025, 2, 12): "元宵節，吃湯圓 🏮",
+    (2025, 5, 11): "母親節，記得跟媽媽說聲我愛你 💐",
+    (2025, 5, 31): "端午節，吃粽子划龍舟！🐉",
+    (2025, 10, 6): "中秋節，月圓人團圓 🥮",
+    (2025, 11, 27): "感恩節（美國）",
+    # ── 2026 ──
+    (2026, 2, 16): "除夕前一天，準備圍爐囉！",
+    (2026, 2, 17): "除夕，團圓夜！🧨",
+    (2026, 2, 18): "春節初一，新年快樂！🧧",
+    (2026, 2, 19): "春節初二，回娘家",
+    (2026, 2, 20): "春節初三",
+    (2026, 2, 21): "春節假期",
+    (2026, 2, 22): "春節假期最後一天",
+    (2026, 3, 5):  "元宵節，吃湯圓 🏮",
+    (2026, 5, 10): "母親節，記得跟媽媽說聲我愛你 💐",
+    (2026, 6, 19): "端午節，吃粽子划龍舟！🐉",
+    (2026, 9, 25): "中秋節，月圓人團圓 🥮",
+    (2026, 11, 26): "感恩節（美國）",
+}
+
+
+def get_calendar_context(now: datetime) -> str:
+    """根據今天日期產生日曆相關提示"""
+    parts = []
+
+    # 檢查今天是否為節日
+    today_fixed = FIXED_HOLIDAYS.get((now.month, now.day))
+    if today_fixed:
+        parts.append(f"🗓 今天是：{today_fixed}")
+
+    today_floating = FLOATING_HOLIDAYS.get((now.year, now.month, now.day))
+    if today_floating:
+        parts.append(f"🗓 今天是：{today_floating}")
+
+    # 檢查明天、後天是否有節日（提前提醒）
+    for days_ahead in [1, 2, 3]:
+        future = now + timedelta(days=days_ahead)
+        label = ["明天", "後天", "大後天"][days_ahead - 1]
+
+        future_fixed = FIXED_HOLIDAYS.get((future.month, future.day))
+        future_floating = FLOATING_HOLIDAYS.get((future.year, future.month, future.day))
+        upcoming = future_fixed or future_floating
+        if upcoming:
+            parts.append(f"📅 {label}是：{upcoming}")
+
+    if not parts:
+        return ""
+    return "".join(parts) + " 可以自然地融入問候中提到這個日子。"
+
 
 # ─────────────────────────────────────────────
 # System Prompt — 大老闆的貼心秘書
@@ -137,14 +229,20 @@ async def send_scheduled_message(slot: str):
         weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
         weekday = weekday_names[now.weekday()]
         is_weekend = now.weekday() >= 5  # 5=六, 6=日
+        # 星期語境
         if is_weekend:
-            day_context = "今天是週末，老闆難得可以放鬆一下，語氣可以更輕鬆愉快，鼓勵他好好休息享受生活。"
+            weekday_hint = "今天是週末，老闆難得可以放鬆一下，語氣可以更輕鬆愉快，鼓勵他好好休息享受生活。"
         elif now.weekday() == 0:
-            day_context = "今天是週一，新的一週開始了，幫老闆打打氣迎接新的挑戰。"
+            weekday_hint = "今天是週一，新的一週開始了，幫老闆打打氣迎接新的挑戰。"
         elif now.weekday() == 4:
-            day_context = "今天是週五，撐過這天就是週末了，幫老闆加油打氣！"
+            weekday_hint = "今天是週五，撐過這天就是週末了，幫老闆加油打氣！"
         else:
-            day_context = ""
+            weekday_hint = ""
+
+        # 日曆節日語境
+        calendar_hint = get_calendar_context(now)
+
+        day_context = weekday_hint + calendar_hint
         prompt = config["prompt"].format(today=today, weekday=weekday, day_context=day_context)
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
