@@ -167,6 +167,27 @@ ASSISTANT_SYSTEM_PROMPT = (
     "每個成功的大老闆背後，都有一個默默撐住一切的人——那就是你，Lumio。\n"
 )
 
+
+def build_system_prompt() -> str:
+    """動態產生 system prompt，注入當前日期時間與日曆資訊"""
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+    date_str = now.strftime("%Y年%m月%d日")
+    time_str = now.strftime("%H:%M")
+    weekday = weekday_names[now.weekday()]
+
+    calendar_info = get_calendar_context(now)
+
+    date_block = (
+        f"【現在時間】\n"
+        f"現在是台灣時間 {date_str}（{weekday}）{time_str}。\n"
+    )
+    if calendar_info:
+        date_block += f"{calendar_info}\n"
+    date_block += "\n"
+
+    return date_block + ASSISTANT_SYSTEM_PROMPT
+
 # ─────────────────────────────────────────────
 # 定時推播（一天四次貼心提醒）
 # ─────────────────────────────────────────────
@@ -391,10 +412,12 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     # 取得歷史（已自動裁剪）
     messages = db.get_history(user_id)
 
+    system_prompt = build_system_prompt()
+
     response = anthropic_client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
-        system=ASSISTANT_SYSTEM_PROMPT,
+        system=system_prompt,
         tools=[WEB_SEARCH_TOOL],
         messages=messages,
     )
@@ -418,7 +441,7 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
         response = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1000,
-            system=ASSISTANT_SYSTEM_PROMPT,
+            system=system_prompt,
             tools=[WEB_SEARCH_TOOL],
             messages=messages,
         )
