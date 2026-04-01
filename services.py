@@ -4,11 +4,41 @@ import requests
 from urllib.parse import quote
 
 
+def _refine_query(raw_query: str) -> str:
+    """用 Claude 將模糊/不精確的搜尋詞優化為精準搜尋語句"""
+    from config import anthropic_client, CLAUDE_MODEL
+    try:
+        resp = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=100,
+            system=(
+                "你是搜尋查詢優化器。用戶輸入可能不精確、有錯字、口語化或太模糊。"
+                "你的任務是將其轉換為精準的搜尋語句，以獲得最佳搜尋結果。\n"
+                "規則：\n"
+                "1. 修正明顯的錯字和別字（例：「台積店」→「台積電」）\n"
+                "2. 口語化表達轉為搜尋關鍵字（例：「那個很紅的AI公司」→「OpenAI 公司 最新動態」）\n"
+                "3. 補充必要的上下文（例：「鴻海股價」→「鴻海 2330 今日股價」）\n"
+                "4. 如果已經夠精確，原樣回傳即可\n"
+                "5. 只回傳優化後的搜尋語句，不要加任何解釋"
+            ),
+            messages=[{"role": "user", "content": raw_query}],
+        )
+        refined = resp.content[0].text.strip()
+        if refined:
+            return refined
+    except Exception:
+        pass
+    return raw_query
+
+
 def web_search(query: str) -> str:
-    """用 Perplexity API 搜尋"""
+    """用 Perplexity API 搜尋（自動優化模糊查詢）"""
     api_key = os.getenv("PERPLEXITY_API_KEY", "")
     if not api_key:
         return "搜尋功能未設定，請在環境變數加入 PERPLEXITY_API_KEY。"
+
+    refined_query = _refine_query(query)
+
     try:
         resp = requests.post(
             "https://api.perplexity.ai/chat/completions",
@@ -20,7 +50,7 @@ def web_search(query: str) -> str:
                 "model": "sonar",
                 "messages": [
                     {"role": "system", "content": "請用繁體中文回答，提供最新、準確的資訊。附上資料來源。"},
-                    {"role": "user", "content": query},
+                    {"role": "user", "content": refined_query},
                 ],
             },
             timeout=15,
@@ -71,14 +101,20 @@ WEB_SEARCH_TOOL = {
     "name": "web_search",
     "description": (
         "搜尋網路上的即時資訊。當老闆問到最新新聞、即時資訊、股價、"
-        "特定公司/產品/人物的近況、或任何你不確定的事實性問題時，使用這個工具。"
+        "特定公司/產品/人物的近況、或任何你不確定的事實性問題時，使用這個工具。\n"
+        "重要：老闆輸入可能口語化、有錯字或不精確。你必須先理解老闆的真正意圖，"
+        "再將 query 轉換為精準的搜尋關鍵字。例如：\n"
+        "- 老闆說「那個AI股票」→ query 用「NVIDIA 輝達 股價 最新」\n"
+        "- 老闆說「台積店」→ 理解為「台積電」→ query 用「台積電 TSMC 最新消息」\n"
+        "- 老闆說「最近很紅的那個減肥藥」→ query 用「GLP-1 減肥藥 Ozempic Wegovy 最新」\n"
+        "永遠用完整、精確的關鍵字搜尋，不要直接照搬老闆的原話。"
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "搜尋關鍵字（建議用英文或中文皆可）",
+                "description": "優化後的精準搜尋關鍵字（修正錯字、補充上下文、去口語化）",
             }
         },
         "required": ["query"],
