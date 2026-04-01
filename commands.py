@@ -136,11 +136,16 @@ def _handle_search(t: str) -> str:
         search_result = web_search(query)
         text = _claude(
             "你是大老闆的貼心秘書 Lumio。老闆請你搜尋了一些資料，"
-            "請根據搜尋結果，用簡潔易懂的方式整理重點回覆老闆。"
+            "請根據搜尋結果，綜合多個來源，用簡潔易懂的方式整理重點回覆老闆。\n"
+            "整理原則：\n"
+            "1. 先給一句話結論\n"
+            "2. 再列出 3~5 個重點，標註資訊來自哪些來源\n"
+            "3. 如果不同來源說法不同，簡要提及差異\n"
+            "4. 最後附上參考來源連結\n"
             "使用繁體中文，語氣溫暖專業。如果搜尋結果不夠完整就如實說明。"
             f"重要：你在 LINE 上回覆，{NO_MARKDOWN_SUFFIX}",
-            f"搜尋「{query}」的結果：\n\n{search_result}\n\n請整理重點回覆。",
-            max_tokens=800,
+            f"搜尋「{query}」的結果：\n\n{search_result}\n\n請綜合多來源整理重點回覆。",
+            max_tokens=1000,
         )
         return f"🔍 搜尋結果整理～\n\n{text}"
     except Exception as e:
