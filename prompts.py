@@ -73,11 +73,25 @@ def build_system_prompt() -> str:
 
     calendar_info = get_holiday_context(now)
 
+    # 判斷時段
+    hour = now.hour
+    if 5 <= hour < 11:
+        period = "早上"
+    elif 11 <= hour < 14:
+        period = "中午"
+    elif 14 <= hour < 17:
+        period = "下午"
+    elif 17 <= hour < 19:
+        period = "傍晚"
+    else:
+        period = "晚上"
+
     date_block = (
-        f"【重要：現在時間】\n"
-        f"今天是 {date_str}（{weekday}），現在台灣時間 {time_str}。\n"
-        f"你一定知道今天的日期，當老闆問你今天幾月幾號、星期幾、現在幾點，"
-        f"請直接自信地回答：今天是{now.month}月{now.day}日，{weekday}。\n"
+        f"【最高優先：現在時間（此資訊永遠優先於對話記憶中的任何時間）】\n"
+        f"現在是 {date_str}（{weekday}）台灣時間 {time_str}，時段是「{period}」。\n"
+        f"你必須根據這個真實時間來回應，忽略對話歷史中出現的任何舊時間。\n"
+        f"例如：現在是{period} {time_str}，就不要說「早上好」或「現在8點」這種與實際時間矛盾的話。\n"
+        f"回覆中提到時間時，必須符合「現在是{period}」的語境。\n"
     )
     if calendar_info:
         date_block += f"{calendar_info}\n"

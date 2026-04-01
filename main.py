@@ -1,4 +1,5 @@
 """LINE AI Bot — Lumio 大老闆的貼心秘書（FastAPI 入口）"""
+import re
 import base64
 from contextlib import asynccontextmanager
 
@@ -82,8 +83,25 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
             reply += block.text
 
     reply = reply or "抱歉，我暫時無法回應，請再試一次～"
+    reply = _strip_markdown(reply)
     db.save_message(user_id, "assistant", reply)
     return reply
+
+
+def _strip_markdown(text: str) -> str:
+    """移除 LINE 不支援的 Markdown 語法"""
+    # **粗體** / __粗體__ → 粗體
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # *斜體* / _斜體_ （但不影響 emoji 旁的 _ 或 URL 中的 _）
+    text = re.sub(r'(?<!\w)\*([^*\n]+?)\*(?!\w)', r'\1', text)
+    # # 標題
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # [文字](連結) → 文字\n連結
+    text = re.sub(r'\[([^\]]+?)\]\((https?://[^\)]+)\)', r'\1\n\2', text)
+    # `程式碼` → 程式碼
+    text = re.sub(r'`([^`]+?)`', r'\1', text)
+    return text
 
 
 # ─── FastAPI Lifespan ───
