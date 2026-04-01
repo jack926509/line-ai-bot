@@ -32,7 +32,7 @@ def _refine_query(raw_query: str) -> str:
 
 
 def web_search(query: str) -> str:
-    """用 Perplexity API 搜尋（自動優化模糊查詢）"""
+    """用 Perplexity API 搜尋（自動優化模糊查詢，多來源彙整）"""
     api_key = os.getenv("PERPLEXITY_API_KEY", "")
     if not api_key:
         return "搜尋功能未設定，請在環境變數加入 PERPLEXITY_API_KEY。"
@@ -47,21 +47,35 @@ def web_search(query: str) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "sonar",
+                "model": "sonar-pro",
                 "messages": [
-                    {"role": "system", "content": "請用繁體中文回答，提供最新、準確的資訊。附上資料來源。"},
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是專業資訊研究員。請從多個來源交叉比對，彙整最完整、最新的資訊。\n"
+                            "要求：\n"
+                            "1. 盡可能引用多個不同來源（新聞、官方網站、論壇、報告等）\n"
+                            "2. 如果不同來源有矛盾，明確指出差異\n"
+                            "3. 標註每段資訊的來源編號 [1][2][3]...\n"
+                            "4. 使用繁體中文回答\n"
+                            "5. 先給結論摘要，再展開細節"
+                        ),
+                    },
                     {"role": "user", "content": refined_query},
                 ],
+                "search_recency_filter": "month",
             },
-            timeout=15,
+            timeout=30,
         )
         resp.raise_for_status()
         data = resp.json()
         answer = data["choices"][0]["message"]["content"]
         citations = data.get("citations", [])
         if citations:
-            sources = "\n".join(f"[{i+1}] {url}" for i, url in enumerate(citations[:3]))
-            return f"{answer}\n\n📎 參考來源：\n{sources}"
+            sources = "\n".join(
+                f"[{i+1}] {url}" for i, url in enumerate(citations[:8])
+            )
+            return f"{answer}\n\n📎 參考來源（共 {len(citations)} 筆）：\n{sources}"
         return answer
     except Exception as e:
         return f"搜尋時發生錯誤：{e}"
