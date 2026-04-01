@@ -47,7 +47,7 @@ def web_search(query: str) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "sonar-pro",
+                "model": "sonar",
                 "messages": [
                     {
                         "role": "system",
