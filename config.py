@@ -16,6 +16,7 @@ GROUP_ID = os.getenv("LINE_GROUP_ID", "")
 
 # ─── 共用常數 ───
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MODEL_LIGHT = "claude-haiku-4-5-20251001"
 TZ_NAME = "Asia/Taipei"
 WEEKDAY_NAMES = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 

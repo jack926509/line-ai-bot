@@ -8,7 +8,7 @@ from linebot.v3.messaging import (
 
 import db
 from config import (
-    anthropic_client, line_config, CLAUDE_MODEL,
+    anthropic_client, line_config, CLAUDE_MODEL, CLAUDE_MODEL_LIGHT,
     TZ_NAME, WEEKDAY_NAMES, GROUP_ID,
 )
 from prompts import SYSTEM_PROMPT
@@ -99,8 +99,8 @@ async def send_morning_briefing():
             "最後加一句正能量鼓勵。控制在 200 字內，不要使用 Markdown。"
         )
         resp = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=500,
+            model=CLAUDE_MODEL_LIGHT,
+            max_tokens=400,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -121,8 +121,8 @@ async def send_scheduled_message(slot: str):
         day_context = get_day_context(now)
         prompt = config["prompt"].format(today=today, weekday=weekday, day_context=day_context)
         resp = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=300,
+            model=CLAUDE_MODEL_LIGHT,
+            max_tokens=200,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
