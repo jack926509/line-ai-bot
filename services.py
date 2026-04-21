@@ -6,10 +6,10 @@ from urllib.parse import quote
 
 def _refine_query(raw_query: str) -> str:
     """用 Claude 將模糊/不精確的搜尋詞優化為精準搜尋語句"""
-    from config import anthropic_client, CLAUDE_MODEL
+    from config import anthropic_client, CLAUDE_MODEL_LIGHT
     try:
         resp = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
+            model=CLAUDE_MODEL_LIGHT,
             max_tokens=100,
             system=(
                 "你是搜尋查詢優化器。用戶輸入可能不精確、有錯字、口語化或太模糊。"

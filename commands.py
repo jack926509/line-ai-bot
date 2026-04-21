@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import db
-from config import anthropic_client, CLAUDE_MODEL, TZ_NAME
+from config import anthropic_client, CLAUDE_MODEL, CLAUDE_MODEL_LIGHT, TZ_NAME
 from prompts import SYSTEM_PROMPT, NO_MARKDOWN_SUFFIX
 from services import web_search
 
@@ -117,9 +117,20 @@ def handle_note(text: str, user_id: str) -> str:
 
 
 def _claude(system: str, user_msg: str, max_tokens: int = 500) -> str:
-    """共用 Claude 呼叫"""
+    """共用 Claude 呼叫（Sonnet，用於需要高品質的任務）"""
     resp = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    return resp.content[0].text
+
+
+def _claude_light(system: str, user_msg: str, max_tokens: int = 300) -> str:
+    """輕量 Claude 呼叫（Haiku，用於簡單任務以節省費用）"""
+    resp = anthropic_client.messages.create(
+        model=CLAUDE_MODEL_LIGHT,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
@@ -165,7 +176,7 @@ def _handle_translate(t: str) -> str:
     if len(parts) < 2:
         return "🌐 用法：/翻譯 Hello, how are you?\n（自動偵測語言互譯中英文）"
     try:
-        text = _claude(
+        text = _claude_light(
             "你是翻譯助手。如果輸入是中文就翻成英文，如果是英文就翻成中文。只回覆翻譯結果，不加解釋。",
             parts[1],
         )
@@ -227,7 +238,7 @@ def _handle_decide(t: str) -> str:
 
 def _handle_motivate() -> str:
     try:
-        text = _claude(
+        text = _claude_light(
             SYSTEM_PROMPT,
             "老闆現在需要一點力量，用你最真心的方式鼓勵他，讓他感受到不管多難都有你在。控制在80字內",
             max_tokens=200,
