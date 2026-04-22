@@ -23,11 +23,5 @@ line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# Bot 自己的 userId（啟動後由 lifespan 設定）
+# Bot userId（啟動後由 lifespan 設定）
 BOT_USER_ID = ""
-
-
-def get_line_api():
-    """取得 LINE Messaging API client（context manager）"""
-    from linebot.v3.messaging import ApiClient
-    return ApiClient(line_config)

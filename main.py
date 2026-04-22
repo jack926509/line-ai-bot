@@ -17,8 +17,7 @@ import db
 import config
 from config import (
     line_config, webhook_handler as handler,
-    anthropic_client,
-    CLAUDE_MODEL, TZ_NAME,
+    anthropic_client, CLAUDE_MODEL,
 )
 from prompts import build_system_prompt
 from services import TOOLS, dispatch_tool
