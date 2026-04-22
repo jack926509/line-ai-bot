@@ -1,13 +1,17 @@
-"""Google Calendar API 封裝（Service Account，讀寫）"""
+"""Google Calendar API 封裝（Service Account，讀寫，快取 service）"""
 import os
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from config import TZ_NAME
 
+_cached_service = None
+
 
 def _get_service():
-    """取得 Google Calendar API 服務（讀寫權限）"""
+    global _cached_service
+    if _cached_service is not None:
+        return _cached_service
     creds_json = os.getenv("GOOGLE_CALENDAR_CREDENTIALS", "")
     if not creds_json:
         return None
@@ -18,18 +22,21 @@ def _get_service():
         creds = service_account.Credentials.from_service_account_info(
             info, scopes=["https://www.googleapis.com/auth/calendar"]
         )
-        return build("calendar", "v3", credentials=creds)
+        _cached_service = build("calendar", "v3", credentials=creds)
+        return _cached_service
     except Exception as e:
         print(f"[Google Calendar] 初始化失敗：{e}")
         return None
 
 
-def _get_calendar_id() -> str:
+def _cal_id() -> str:
     return os.getenv("GOOGLE_CALENDAR_ID", "primary")
 
 
+_WEEKDAY = ["一", "二", "三", "四", "五", "六", "日"]
+
+
 def get_events(date_str: str | None = None, days: int = 1) -> str:
-    """查詢指定日期的行程（預設今天）"""
     service = _get_service()
     if not service:
         return "⚠️ Google Calendar 未設定"
@@ -38,24 +45,23 @@ def get_events(date_str: str | None = None, days: int = 1) -> str:
             try:
                 base = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=ZoneInfo(TZ_NAME))
             except ValueError:
-                return f"⚠️ 日期格式錯誤，請用 YYYY-MM-DD 格式"
+                return "⚠️ 日期格式錯誤，請用 YYYY-MM-DD"
         else:
             base = datetime.now(ZoneInfo(TZ_NAME))
 
         start = base.replace(hour=0, minute=0, second=0).isoformat()
-        end_dt = base + timedelta(days=days)
-        end = end_dt.replace(hour=23, minute=59, second=59).isoformat()
+        end = (base + timedelta(days=days)).replace(hour=23, minute=59, second=59).isoformat()
 
         result = service.events().list(
-            calendarId=_get_calendar_id(),
+            calendarId=_cal_id(),
             timeMin=start, timeMax=end,
             singleEvents=True, orderBy="startTime",
             timeZone=TZ_NAME,
         ).execute()
         events = result.get("items", [])
         if not events:
-            date_label = base.strftime("%m/%d") if date_str else "今天"
-            return f"📅 {date_label} 沒有行程安排"
+            label = base.strftime("%m/%d") if date_str else "今天"
+            return f"📅 {label} 沒有行程安排"
 
         lines = []
         current_date = None
@@ -69,12 +75,10 @@ def get_events(date_str: str | None = None, days: int = 1) -> str:
                 if ev_date != current_date:
                     current_date = ev_date
                     d = datetime.strptime(ev_date, "%Y-%m-%d")
-                    weekday_names = ["一", "二", "三", "四", "五", "六", "日"]
-                    lines.append(f"\n📆 {d.month}/{d.day}（週{weekday_names[d.weekday()]}）")
+                    lines.append(f"\n📆 {d.month}/{d.day}（週{_WEEKDAY[d.weekday()]}）")
 
             if "T" in s:
-                time_str = datetime.fromisoformat(s).strftime("%H:%M")
-                line = f"  ⏰ {time_str} {title}"
+                line = f"  ⏰ {datetime.fromisoformat(s).strftime('%H:%M')} {title}"
             else:
                 line = f"  📌 整天 {title}"
             if location:
@@ -90,7 +94,6 @@ def get_events(date_str: str | None = None, days: int = 1) -> str:
 
 def add_event(title: str, start_time: str, end_time: str | None = None,
               location: str | None = None, description: str | None = None) -> str:
-    """新增日曆行程"""
     service = _get_service()
     if not service:
         return "⚠️ Google Calendar 未設定"
@@ -110,8 +113,7 @@ def add_event(title: str, start_time: str, end_time: str | None = None,
                 if not end_time.endswith("+08:00") and "T" in end_time:
                     end_time += "+08:00"
             else:
-                st = datetime.fromisoformat(start_time)
-                end_time = (st + timedelta(hours=1)).isoformat()
+                end_time = (datetime.fromisoformat(start_time) + timedelta(hours=1)).isoformat()
 
             event_body = {
                 "summary": title,
@@ -124,9 +126,7 @@ def add_event(title: str, start_time: str, end_time: str | None = None,
         if description:
             event_body["description"] = description
 
-        created = service.events().insert(
-            calendarId=_get_calendar_id(), body=event_body
-        ).execute()
+        service.events().insert(calendarId=_cal_id(), body=event_body).execute()
 
         if is_all_day:
             time_info = f"📅 {start_time}"
@@ -145,7 +145,6 @@ def add_event(title: str, start_time: str, end_time: str | None = None,
 
 
 def delete_event(event_title: str, date_str: str | None = None) -> str:
-    """依標題刪除行程"""
     service = _get_service()
     if not service:
         return "⚠️ Google Calendar 未設定"
@@ -163,26 +162,18 @@ def delete_event(event_title: str, date_str: str | None = None) -> str:
         end = (base + timedelta(days=30)).isoformat()
 
         result = service.events().list(
-            calendarId=_get_calendar_id(),
+            calendarId=_cal_id(),
             timeMin=start, timeMax=end,
             singleEvents=True, orderBy="startTime",
-            q=event_title,
-            timeZone=TZ_NAME,
+            q=event_title, timeZone=TZ_NAME,
         ).execute()
         events = result.get("items", [])
         if not events:
             return f"⚠️ 找不到標題包含「{event_title}」的行程"
 
         ev = events[0]
-        service.events().delete(
-            calendarId=_get_calendar_id(), eventId=ev["id"]
-        ).execute()
+        service.events().delete(calendarId=_cal_id(), eventId=ev["id"]).execute()
         return f"🗑 已刪除行程：「{ev.get('summary', event_title)}」"
     except Exception as e:
         print(f"[Google Calendar] 刪除失敗：{e}")
         return f"⚠️ 行程刪除失敗：{e}"
-
-
-def get_today_events() -> str:
-    """取得今天的行程（向下相容舊呼叫）"""
-    return get_events()

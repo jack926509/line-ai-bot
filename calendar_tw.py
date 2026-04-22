@@ -87,17 +87,3 @@ def get_holiday_context(now: datetime) -> str:
     return "".join(parts) + " 可以自然地融入問候中提到這個日子。"
 
 
-def get_weekday_context(now: datetime) -> str:
-    """產生星期語境"""
-    if now.weekday() >= 5:
-        return "今天是週末，老闆難得可以放鬆一下，語氣可以更輕鬆愉快，鼓勵他好好休息享受生活。"
-    if now.weekday() == 0:
-        return "今天是週一，新的一週開始了，幫老闆打打氣迎接新的挑戰。"
-    if now.weekday() == 4:
-        return "今天是週五，撐過這天就是週末了，幫老闆加油打氣！"
-    return ""
-
-
-def get_day_context(now: datetime) -> str:
-    """合併星期 + 節日語境"""
-    return get_weekday_context(now) + get_holiday_context(now)
