@@ -168,7 +168,87 @@ GOOGLE_MAP_TOOL = {
     },
 }
 
-TOOLS = [WEB_SEARCH_TOOL, GOOGLE_MAP_TOOL]
+GCAL_QUERY_TOOL = {
+    "name": "gcal_query",
+    "description": (
+        "查詢 Google Calendar 行程。老闆問「今天有什麼行程」「明天的會議」「這週行程」"
+        "「下週一有空嗎」等，使用這個工具查詢日曆。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "description": "查詢日期，格式 YYYY-MM-DD。不填則查今天。",
+            },
+            "days": {
+                "type": "integer",
+                "description": "查詢天數（預設 1 天，查一週用 7）",
+                "default": 1,
+            },
+        },
+        "required": [],
+    },
+}
+
+GCAL_ADD_TOOL = {
+    "name": "gcal_add",
+    "description": (
+        "新增行程到 Google Calendar。老闆說「幫我排明天下午3點開會」"
+        "「記一下週五整天出差」等，使用這個工具新增行程。"
+        "時間格式用 ISO 8601（例：2025-04-22T15:00:00），整天行程只需日期（2025-04-22）。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "行程標題",
+            },
+            "start_time": {
+                "type": "string",
+                "description": "開始時間（ISO 格式如 2025-04-22T15:00:00）或日期（2025-04-22 整天）",
+            },
+            "end_time": {
+                "type": "string",
+                "description": "結束時間（選填，預設 1 小時後）",
+            },
+            "location": {
+                "type": "string",
+                "description": "地點（選填）",
+            },
+            "description": {
+                "type": "string",
+                "description": "備註說明（選填）",
+            },
+        },
+        "required": ["title", "start_time"],
+    },
+}
+
+GCAL_DELETE_TOOL = {
+    "name": "gcal_delete",
+    "description": (
+        "刪除 Google Calendar 行程。老闆說「取消明天的會議」「刪掉那個聚餐」時使用。"
+        "會搜尋標題最接近的行程刪除。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "要刪除的行程標題關鍵字",
+            },
+            "date": {
+                "type": "string",
+                "description": "行程日期 YYYY-MM-DD（選填，縮小搜尋範圍）",
+            },
+        },
+        "required": ["title"],
+    },
+}
+
+TOOLS = [WEB_SEARCH_TOOL, GOOGLE_MAP_TOOL, GCAL_QUERY_TOOL, GCAL_ADD_TOOL, GCAL_DELETE_TOOL]
 
 
 def dispatch_tool(name: str, input_data: dict) -> str:
@@ -177,4 +257,25 @@ def dispatch_tool(name: str, input_data: dict) -> str:
         return web_search(input_data["query"])
     if name == "google_map_search":
         return google_map_search(input_data["places"])
+    if name == "gcal_query":
+        from gcal import get_events
+        return get_events(
+            date_str=input_data.get("date"),
+            days=input_data.get("days", 1),
+        )
+    if name == "gcal_add":
+        from gcal import add_event
+        return add_event(
+            title=input_data["title"],
+            start_time=input_data["start_time"],
+            end_time=input_data.get("end_time"),
+            location=input_data.get("location"),
+            description=input_data.get("description"),
+        )
+    if name == "gcal_delete":
+        from gcal import delete_event
+        return delete_event(
+            event_title=input_data["title"],
+            date_str=input_data.get("date"),
+        )
     return "未知的工具"

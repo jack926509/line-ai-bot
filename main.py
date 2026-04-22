@@ -12,22 +12,17 @@ from linebot.v3.webhooks import (
     MessageEvent, TextMessageContent, ImageMessageContent,
 )
 from linebot.v3.exceptions import InvalidSignatureError
-from apscheduler.triggers.cron import CronTrigger
 
 import db
 import config
 from config import (
     line_config, webhook_handler as handler,
-    anthropic_client, scheduler,
-    CLAUDE_MODEL, TZ_NAME, GROUP_ID,
+    anthropic_client,
+    CLAUDE_MODEL, TZ_NAME,
 )
 from prompts import build_system_prompt
 from services import TOOLS, dispatch_tool
 from commands import handle_command, handle_reset_memory, handle_todo, handle_note
-from scheduler import (
-    send_morning_briefing, send_scheduled_message,
-    check_due_reminders, SCHEDULED_MESSAGES,
-)
 
 
 # ─── Claude 對話（支援圖片 + 工具呼叫）───
@@ -119,33 +114,9 @@ async def lifespan(app: FastAPI):
         print(f"[警告] 無法取得 Bot userId: {e}")
 
     db.init_db()
-
-    # 啟動排程
-    if GROUP_ID:
-        scheduler.add_job(
-            send_morning_briefing,
-            CronTrigger(hour=8, minute=0, timezone=TZ_NAME),
-            id="morning_briefing",
-        )
-        for slot, cfg in SCHEDULED_MESSAGES.items():
-            scheduler.add_job(
-                send_scheduled_message,
-                CronTrigger(hour=cfg["hour"], minute=cfg["minute"], timezone=TZ_NAME),
-                args=[slot],
-                id=f"scheduled_{slot}",
-            )
-        for h in (9, 20):
-            scheduler.add_job(
-                check_due_reminders,
-                CronTrigger(hour=h, minute=0, timezone=TZ_NAME),
-                id=f"due_reminder_{h}",
-            )
-    scheduler.start()
-    print("[排程] 啟動完成（晨報 08:00 / 推播 12:00+16:00+23:00 / 到期提醒 09:00+20:00）")
+    print("[Bot 啟動] 初始化完成")
 
     yield
-
-    scheduler.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)
