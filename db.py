@@ -170,7 +170,7 @@ def clear_notes(user_id: str):
 
 # ─── 對話記憶 ───
 
-MAX_HISTORY = 20
+MAX_HISTORY = 12
 
 
 def save_message(user_id: str, role: str, content) -> None:

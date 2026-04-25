@@ -1,9 +1,42 @@
-"""Claude 對話引擎（含工具呼叫迴圈）"""
+"""Claude 對話引擎（含工具呼叫迴圈 + Prompt Caching）"""
 import re
 import db
 from config import anthropic_client, CLAUDE_MODEL
-from prompts import build_system_prompt
+from prompts import SYSTEM_PROMPT, build_date_block
 from features.tools import TOOLS, dispatch_tool
+
+# 靜態工具列表：在最後一個 tool 加 cache_control，
+# 告知 Claude API 快取所有 tool 定義（約 2000 token，5 分鐘 TTL）
+_TOOLS_CACHED = TOOLS[:-1] + [{**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
+# Sonnet 4.6 定價參考（USD / 1M tokens）
+_PRICE = {"in": 3.0, "cache_write": 3.75, "cache_read": 0.30, "out": 15.0}
+
+
+def _build_system() -> list[dict]:
+    """靜態 SYSTEM_PROMPT 加 cache；動態日期區塊每次重算但 token 少"""
+    return [
+        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": build_date_block()},
+    ]
+
+
+def _log_usage(usage, call_n: int) -> None:
+    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    regular_in = usage.input_tokens - cache_read
+    out = usage.output_tokens
+    cost = (
+        regular_in * _PRICE["in"] +
+        cache_write * _PRICE["cache_write"] +
+        cache_read * _PRICE["cache_read"] +
+        out * _PRICE["out"]
+    ) / 1_000_000
+    print(
+        f"[Claude #{call_n}] in={usage.input_tokens} "
+        f"cache_write={cache_write} cache_read={cache_read} "
+        f"out={out} ≈${cost:.5f}"
+    )
 
 
 def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
@@ -16,14 +49,16 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     )
     db.save_message(user_id, "user", content)
     messages = db.get_history(user_id)
-    system = build_system_prompt()
+    system = _build_system()
 
     response = anthropic_client.messages.create(
         model=CLAUDE_MODEL, max_tokens=1000,
-        system=system, tools=TOOLS, messages=messages,
+        system=system, tools=_TOOLS_CACHED, messages=messages,
     )
+    _log_usage(response.usage, 1)
 
-    for _ in range(5):
+    # 最多 3 輪 tool use（現實場景：1-2 輪已足夠）
+    for i in range(3):
         if response.stop_reason != "tool_use":
             break
         tool_results = [
@@ -38,8 +73,9 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
         messages.append({"role": "user", "content": tool_results})
         response = anthropic_client.messages.create(
             model=CLAUDE_MODEL, max_tokens=1000,
-            system=system, tools=TOOLS, messages=messages,
+            system=system, tools=_TOOLS_CACHED, messages=messages,
         )
+        _log_usage(response.usage, i + 2)
 
     reply = "".join(getattr(b, "text", "") for b in response.content)
     reply = reply or "抱歉，我暫時無法回應，請再試一次～"

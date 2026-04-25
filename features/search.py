@@ -4,30 +4,11 @@ import requests
 from urllib.parse import quote
 
 
-def _refine_query(raw: str) -> str:
-    from config import anthropic_client, CLAUDE_MODEL_LIGHT
-    try:
-        resp = anthropic_client.messages.create(
-            model=CLAUDE_MODEL_LIGHT,
-            max_tokens=100,
-            system=(
-                "你是搜尋查詢優化器。將模糊/口語/錯字查詢轉成精準搜尋語句。"
-                "修正錯字、口語轉關鍵字、補充上下文。只回傳優化後的語句，不加解釋。"
-            ),
-            messages=[{"role": "user", "content": raw}],
-        )
-        refined = resp.content[0].text.strip()
-        return refined or raw
-    except Exception:
-        return raw
-
-
 def web_search(query: str) -> str:
+    """用 Perplexity 搜尋。query 由 Claude 傳入，已是最佳化關鍵字，直接使用。"""
     api_key = os.getenv("PERPLEXITY_API_KEY", "")
     if not api_key:
         return "搜尋功能未設定，請加入 PERPLEXITY_API_KEY。"
-
-    refined = _refine_query(query)
     try:
         resp = requests.post(
             "https://api.perplexity.ai/chat/completions",
@@ -42,7 +23,7 @@ def web_search(query: str) -> str:
                             "引用多個不同來源，標註來源編號 [1][2]...，繁體中文，先結論再細節。"
                         ),
                     },
-                    {"role": "user", "content": refined},
+                    {"role": "user", "content": query},
                 ],
                 "search_recency_filter": "month",
             },
