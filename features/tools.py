@@ -13,6 +13,7 @@ from features.law import law_search
 from features.trip import trip_create, trip_list, trip_detail, trip_delete
 from features.workflow import compose_workflow
 import features.todo as todo_feat
+import features.note as note_feat
 
 
 # ── Tool 定義 ────────────────────────────────────
@@ -450,11 +451,11 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
 
         # ── 備忘
         case "note_list":
-            return todo_feat.note_list(user_id)
+            return note_feat.note_list(user_id)
         case "note_add":
-            return todo_feat.note_add(user_id, d["content"])
+            return note_feat.note_add(user_id, d["content"])
         case "note_delete":
-            return todo_feat.note_delete(user_id, d["index"])
+            return note_feat.note_delete(user_id, d["index"])
 
         # ── 公文 & 範本
         case "gen_official_doc":

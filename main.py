@@ -14,7 +14,9 @@ from config import (
     webhook_handler as handler,
 )
 from features.chat import ask_claude, analyze_file
-from features.todo import handle_todo, handle_note, handle_reset_memory, handle_help
+from features.todo import handle_todo
+from features.note import handle_note
+from features.help import handle_reset_memory, handle_help
 from features.calendar import handle_cal
 from features.briefing import build_morning_briefing
 from features.url_summary import summarize_url
