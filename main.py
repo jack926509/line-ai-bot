@@ -165,13 +165,13 @@ def on_text(event: MessageEvent):
 
         # 指令優先
         t = text.strip()
-        if t in ("/清除記憶", "/reset", "/清除"):
+        if t in ("/reset", "/清除記憶"):
             reply(handle_reset_memory(user_id))
             return
-        if t.startswith("/todo") or t.startswith("/待辦"):
-            reply(handle_todo(text, user_id))
+        if t.startswith("/待辦") or t.startswith("/t ") or t == "/t":
+            reply(handle_todo(text.replace("/t ", "/待辦 ", 1).replace("/t", "/待辦", 1), user_id))
             return
-        if t.startswith("/note") or t.startswith("/記事") or t.startswith("/備忘"):
+        if t.startswith("/記事") or t.startswith("/備忘"):
             reply(handle_note(text, user_id))
             return
         cmd_reply = handle_command(text)
