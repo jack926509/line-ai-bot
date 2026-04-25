@@ -26,6 +26,12 @@ CLAUDE_MODEL_LIGHT = "claude-haiku-4-5-20251001"
 TZ_NAME = "Asia/Taipei"
 WEEKDAY_NAMES = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
+# ─── 推播 / 排程設定 ───
+WEATHER_CITY = os.getenv("WEATHER_CITY", "Taipei")
+DISABLE_SCHEDULER = os.getenv("DISABLE_SCHEDULER", "").lower() in ("1", "true", "yes")
+BRIEF_HOUR = int(os.getenv("BRIEF_HOUR", "8"))
+BRIEF_MINUTE = int(os.getenv("BRIEF_MINUTE", "0"))
+
 # ─── 共用實例 ───
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET)

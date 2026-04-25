@@ -4,6 +4,7 @@ from features.calendar import (
     get_events, get_upcoming_events, add_event,
     update_event, delete_event, check_free_busy,
 )
+from features.url_summary import summarize_url
 import features.todo as todo_feat
 
 
@@ -22,6 +23,21 @@ _WEB_SEARCH = {
             "query": {"type": "string", "description": "優化後的精準搜尋關鍵字"},
         },
         "required": ["query"],
+    },
+}
+
+_SUMMARIZE_URL = {
+    "name": "summarize_url",
+    "description": (
+        "摘要網址內容。老闆貼網址、新聞連結、想了解某個 URL 內容時主動使用。"
+        "回傳一句話總結 + 主要重點 + 後續行動建議。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "完整網址（http:// 或 https://）"},
+        },
+        "required": ["url"],
     },
 }
 
@@ -224,7 +240,7 @@ _NOTE_DELETE = {
 
 
 TOOLS = [
-    _WEB_SEARCH, _GOOGLE_MAP,
+    _WEB_SEARCH, _SUMMARIZE_URL, _GOOGLE_MAP,
     _GCAL_QUERY, _GCAL_UPCOMING, _GCAL_ADD, _GCAL_UPDATE, _GCAL_DELETE, _GCAL_FREE_BUSY,
     _TODO_LIST, _TODO_ADD, _TODO_COMPLETE, _TODO_DELETE,
     _NOTE_LIST, _NOTE_ADD, _NOTE_DELETE,
@@ -240,6 +256,8 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
         # ── 搜尋 & 地圖
         case "web_search":
             return web_search(d["query"])
+        case "summarize_url":
+            return summarize_url(d["url"])
         case "google_map_search":
             return google_map_search(d["places"])
 

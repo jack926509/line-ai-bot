@@ -84,7 +84,121 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_conv_user_id ON conversations(user_id, id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id)")
-    logger.info("PostgreSQL 初始化完成（連線池 1~5）")
+
+        # ─── Stage 0：推播 / 訂閱 / 範本 / 旅遊 / 工作流 ───
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id    TEXT PRIMARY KEY,
+                briefing   BOOLEAN DEFAULT TRUE,
+                brief_time TIME    DEFAULT '08:00',
+                tz         TEXT    DEFAULT 'Asia/Taipei',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS push_log (
+                id         SERIAL PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                kind       TEXT NOT NULL,
+                ref_date   DATE NOT NULL,
+                pushed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (user_id, kind, ref_date)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS doc_templates (
+                id         SERIAL PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                category   TEXT DEFAULT '一般',
+                body       TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tpl_user ON doc_templates(user_id)")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS trips (
+                id         SERIAL PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                start_date DATE NOT NULL,
+                end_date   DATE NOT NULL,
+                places     JSONB DEFAULT '[]'::jsonb,
+                gcal_ids   JSONB DEFAULT '[]'::jsonb,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_trips_user ON trips(user_id)")
+        # 多步驟工作流預留（暫不啟用，避免日後遷移痛苦）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS workflows (
+                id           SERIAL PRIMARY KEY,
+                user_id      TEXT NOT NULL,
+                name         TEXT NOT NULL,
+                steps        JSONB DEFAULT '[]'::jsonb,
+                state        TEXT DEFAULT 'pending',
+                next_run_at  TIMESTAMP,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    logger.info("PostgreSQL 初始化完成（含 Stage 0 推播相關表）")
+
+
+# ─── 訂閱與推播 ───
+
+def upsert_subscription(user_id: str) -> None:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO subscriptions (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING",
+            (user_id,),
+        )
+
+
+def get_subscription(user_id: str) -> dict | None:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT user_id, briefing, brief_time, tz FROM subscriptions WHERE user_id=%s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "briefing": row[1], "brief_time": str(row[2])[:5], "tz": row[3]}
+
+
+def set_briefing(user_id: str, enabled: bool) -> None:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE subscriptions SET briefing=%s WHERE user_id=%s", (enabled, user_id))
+
+
+def get_briefing_subscribers() -> list[str]:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM subscriptions WHERE briefing=TRUE")
+        return [r[0] for r in cur.fetchall()]
+
+
+def has_pushed_today(user_id: str, kind: str) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM push_log WHERE user_id=%s AND kind=%s AND ref_date=CURRENT_DATE",
+            (user_id, kind),
+        )
+        return cur.fetchone() is not None
+
+
+def mark_pushed(user_id: str, kind: str) -> None:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO push_log (user_id, kind, ref_date) VALUES (%s, %s, CURRENT_DATE) "
+            "ON CONFLICT DO NOTHING",
+            (user_id, kind),
+        )
 
 
 # ─── 待辦事項 ───
