@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# 虛擬環境
+venv/
+.venv/
+env/
+
+# 環境變數（敏感，絕對禁止上傳）
+.env
+.env.local
+.env.*.local
+
+# 系統
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 日誌
+*.log
