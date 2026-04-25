@@ -248,7 +248,95 @@ GCAL_DELETE_TOOL = {
     },
 }
 
-TOOLS = [WEB_SEARCH_TOOL, GOOGLE_MAP_TOOL, GCAL_QUERY_TOOL, GCAL_ADD_TOOL, GCAL_DELETE_TOOL]
+GCAL_UPDATE_TOOL = {
+    "name": "gcal_update",
+    "description": (
+        "修改 Google Calendar 現有行程。老闆說「把週五的會議改到下午5點」「把聚餐地點改成信義區」"
+        "「會議標題改成季度檢討」等，使用這個工具更新行程。"
+        "可以只改部分欄位（只改時間、只改地點、只改標題都可以）。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "要修改的行程標題關鍵字（用來搜尋行程）",
+            },
+            "date": {
+                "type": "string",
+                "description": "原行程日期 YYYY-MM-DD（選填，縮小搜尋範圍）",
+            },
+            "new_title": {
+                "type": "string",
+                "description": "新的行程標題（選填，不改就不填）",
+            },
+            "new_start": {
+                "type": "string",
+                "description": "新的開始時間（ISO 格式如 2025-04-22T15:00:00，選填）",
+            },
+            "new_end": {
+                "type": "string",
+                "description": "新的結束時間（ISO 格式，選填，不填預設開始後 1 小時）",
+            },
+            "new_location": {
+                "type": "string",
+                "description": "新的地點（選填）",
+            },
+            "new_description": {
+                "type": "string",
+                "description": "新的備註說明（選填）",
+            },
+        },
+        "required": ["title"],
+    },
+}
+
+GCAL_UPCOMING_TOOL = {
+    "name": "gcal_upcoming",
+    "description": (
+        "查詢從現在起最近 N 筆行程。老闆說「接下來有什麼行程」「最近有哪些安排」"
+        "「即將到來的行程」時使用，不用指定特定日期。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": "integer",
+                "description": "要查詢的行程筆數（預設 5，最多 10）",
+                "default": 5,
+            },
+        },
+        "required": [],
+    },
+}
+
+GCAL_FREE_BUSY_TOOL = {
+    "name": "gcal_free_busy",
+    "description": (
+        "查詢某個時段是否有空（無行程衝突）。老闆問「明天下午3點有空嗎」"
+        "「週五2點到4點有沒有衝突」「這個時間我有空嗎」時使用。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "start_time": {
+                "type": "string",
+                "description": "查詢開始時間（ISO 格式如 2025-04-22T15:00:00）",
+            },
+            "end_time": {
+                "type": "string",
+                "description": "查詢結束時間（ISO 格式如 2025-04-22T17:00:00）",
+            },
+        },
+        "required": ["start_time", "end_time"],
+    },
+}
+
+TOOLS = [
+    WEB_SEARCH_TOOL, GOOGLE_MAP_TOOL,
+    GCAL_QUERY_TOOL, GCAL_ADD_TOOL, GCAL_UPDATE_TOOL,
+    GCAL_DELETE_TOOL, GCAL_UPCOMING_TOOL, GCAL_FREE_BUSY_TOOL,
+]
 
 
 def dispatch_tool(name: str, input_data: dict) -> str:
@@ -277,5 +365,25 @@ def dispatch_tool(name: str, input_data: dict) -> str:
         return delete_event(
             event_title=input_data["title"],
             date_str=input_data.get("date"),
+        )
+    if name == "gcal_update":
+        from gcal import update_event
+        return update_event(
+            event_title=input_data["title"],
+            date_str=input_data.get("date"),
+            new_title=input_data.get("new_title"),
+            new_start=input_data.get("new_start"),
+            new_end=input_data.get("new_end"),
+            new_location=input_data.get("new_location"),
+            new_description=input_data.get("new_description"),
+        )
+    if name == "gcal_upcoming":
+        from gcal import get_upcoming_events
+        return get_upcoming_events(count=input_data.get("count", 5))
+    if name == "gcal_free_busy":
+        from gcal import check_free_busy
+        return check_free_busy(
+            start_time=input_data["start_time"],
+            end_time=input_data["end_time"],
         )
     return "未知的工具"

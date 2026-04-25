@@ -13,6 +13,9 @@ def handle_command(text: str) -> str | None:
     """統一指令分派，回傳回覆文字；非指令回傳 None"""
     t = text.strip()
 
+    if t.startswith("/日曆") or t.startswith("/cal"):
+        return _handle_cal(t)
+
     if t.startswith("/行程") or t.startswith("/trip"):
         return _handle_trip(text)
 
@@ -248,6 +251,59 @@ def _handle_motivate() -> str:
         return "💕 不管遇到什麼困難，Lumio都在你身邊喔～加油！"
 
 
+def _handle_cal(t: str) -> str:
+    from gcal import get_events, get_upcoming_events
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    parts = t.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    now = datetime.now(ZoneInfo(TZ_NAME))
+
+    if not arg or arg in ("今天", "today"):
+        return get_events()
+
+    if arg in ("即將", "upcoming", "接下來", "最近"):
+        return get_upcoming_events(count=5)
+
+    if arg in ("明天", "tomorrow"):
+        date_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        return get_events(date_str=date_str)
+
+    if arg in ("後天",):
+        date_str = (now + timedelta(days=2)).strftime("%Y-%m-%d")
+        return get_events(date_str=date_str)
+
+    if arg in ("本週", "這週", "week"):
+        return get_events(days=7)
+
+    if arg in ("下週", "next week"):
+        base_str = (now + timedelta(days=7 - now.weekday())).strftime("%Y-%m-%d")
+        return get_events(date_str=base_str, days=7)
+
+    # 支援 YYYY-MM-DD 或 MM/DD
+    import re
+    if re.match(r"\d{4}-\d{2}-\d{2}", arg):
+        return get_events(date_str=arg)
+    m = re.match(r"(\d{1,2})/(\d{1,2})", arg)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        year = now.year if month >= now.month else now.year + 1
+        date_str = f"{year}-{month:02d}-{day:02d}"
+        return get_events(date_str=date_str)
+
+    return (
+        "📅 /日曆 使用方式：\n"
+        "  /日曆 → 今天行程\n"
+        "  /日曆 明天\n"
+        "  /日曆 本週\n"
+        "  /日曆 即將 → 最近 5 筆\n"
+        "  /日曆 4/30 → 指定日期\n"
+        "  /日曆 2025-05-01 → 指定日期"
+    )
+
+
 def _handle_trip(text: str) -> str:
     t = text.strip()
     parts = t.split(maxsplit=1)
@@ -290,9 +346,16 @@ def _handle_help() -> str:
         "📍 地圖：聊天提到地點自動附地圖\n"
         "🧳 行程：/行程 東京出差3天\n"
         "━━━━━━━━━━━━━━━\n"
-        "📅 日曆：直接說「今天有什麼行程」\n"
-        "　　　　「幫我排明天3點開會」\n"
-        "　　　　「取消週五的聚餐」\n"
+        "📅 日曆（直接對話）：\n"
+        "　　「今天有什麼行程」\n"
+        "　　「幫我排明天3點開會」\n"
+        "　　「把會議改到下午5點」\n"
+        "　　「週五2點有空嗎」\n"
+        "　　「取消週五的聚餐」\n"
+        "📅 日曆（快捷指令）：\n"
+        "　　/日曆 → 今天\n"
+        "　　/日曆 明天｜本週｜即將\n"
+        "　　/日曆 4/30 → 指定日期\n"
         "━━━━━━━━━━━━━━━\n"
         "📝 待辦：/待辦 買牛奶\n"
         "　　　　/待辦 #工作 4/5 準備簡報\n"
