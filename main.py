@@ -7,13 +7,13 @@ from linebot.v3.messaging import (
     ApiClient, MessagingApi, MessagingApiBlob,
     ReplyMessageRequest, TextMessage,
 )
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 
 import db
 import config
 from config import line_config, webhook_handler as handler
-from features.chat import ask_claude
+from features.chat import ask_claude, analyze_file
 from features.todo import handle_todo, handle_note, handle_reset_memory, handle_help
 from features.calendar import handle_cal
 
@@ -124,3 +124,41 @@ def on_image(event: MessageEvent):
             reply(ask_claude(user_id, "", image_b64))
         except Exception as e:
             reply(f"⚠️ 圖片分析失敗：{e}")
+
+
+@handler.add(MessageEvent, message=FileMessageContent)
+def on_file(event: MessageEvent):
+    user_id = event.source.user_id
+    filename = event.message.file_name or "document"
+    file_size = event.message.file_size or 0
+
+    with ApiClient(line_config) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_blob = MessagingApiBlob(api_client)
+
+        def reply(msg: str):
+            try:
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=msg)],
+                    )
+                )
+            except Exception as e:
+                print(f"[回覆失敗] {e}")
+
+        ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+        if ext not in ("pdf", "txt", "md", "csv"):
+            reply(f"⚠️ 目前支援 PDF、TXT、MD、CSV 格式\n收到的是：{filename}")
+            return
+
+        if file_size > 20 * 1024 * 1024:
+            reply(f"⚠️ 檔案太大（{file_size/1024/1024:.1f}MB），請上傳 20MB 以下的文件")
+            return
+
+        try:
+            raw = bytes(line_bot_blob.get_message_content(event.message.id))
+            reply(analyze_file(user_id, raw, filename))
+        except Exception as e:
+            print(f"[文件分析錯誤] {e}")
+            reply(f"⚠️ 文件分析失敗：{e}")
