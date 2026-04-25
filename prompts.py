@@ -89,7 +89,9 @@ _LAW = (
 _TRIP = (
     "【旅遊行程】\n"
     "老闆說「規劃 X 月 X 日 X 地」時，用 trip_create 建立旅程容器並自動寫入 Google Calendar。\n"
-    "查詢用 trip_list / trip_detail；刪除用 trip_delete（會同步清 GCal）。"
+    "查詢用 trip_list / trip_detail；刪除用 trip_delete（會同步清 GCal）。\n"
+    "預設模式：僅給日期與目的地時，只建立 GCal 事件，回覆精簡（旅程名稱／天數／事件數），不主動展開逐日景點。\n"
+    "唯有老闆明確說「規劃／推薦／行程建議／幫我安排活動」時，才產出逐日內容。"
 )
 
 _BELIEF = (
