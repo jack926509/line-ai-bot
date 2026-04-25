@@ -42,6 +42,28 @@ def shutdown_scheduler() -> None:
         logger.info("排程器已關閉")
 
 
+def register_one_off(when, callback, args: list | None = None, job_id: str | None = None) -> None:
+    """登記一次性任務（預留給多步驟工作流使用）。
+
+    when: datetime 物件
+    callback: 任意 callable
+    args: callback 參數列
+    job_id: 自訂 id；若提供則 replace_existing=True
+    """
+    if _scheduler is None:
+        logger.warning("scheduler 未啟動，one-off 任務未登記")
+        return
+    from apscheduler.triggers.date import DateTrigger
+    _scheduler.add_job(
+        callback,
+        DateTrigger(run_date=when),
+        args=args or [],
+        id=job_id,
+        replace_existing=bool(job_id),
+    )
+    logger.info(f"one-off 任務已登記 when={when} id={job_id}")
+
+
 def _morning_briefing_job() -> None:
     """每日 08:00 觸發：對所有訂閱簡報之使用者推送。"""
     from features.briefing import build_morning_briefing

@@ -19,6 +19,10 @@ from features.calendar import handle_cal
 from features.briefing import build_morning_briefing
 from features.url_summary import summarize_url
 from features.scheduler import start_scheduler, shutdown_scheduler
+from features.doc_official import handle_template
+from features.law import law_search
+from features.trip import handle_trip
+from features.meeting import analyze_meeting_file
 
 
 # ── FastAPI Lifespan ──────────────────────────────
@@ -125,6 +129,13 @@ def on_text(event: MessageEvent):
     elif t.startswith("/摘要 ") or t.startswith("/摘要\n"):
         url = t[3:].strip()
         _reply(event.reply_token, summarize_url(url))
+    elif t.startswith("/範本"):
+        _reply(event.reply_token, handle_template(t, user_id))
+    elif t.startswith("/法規 ") or t.startswith("/法規\n"):
+        q = t[3:].strip()
+        _reply(event.reply_token, law_search(q) if q else "📜 用法：/法規 <關鍵字或條號>")
+    elif t.startswith("/旅遊"):
+        _reply(event.reply_token, handle_trip(t, user_id))
     elif t.startswith("/待辦") or t.startswith("/t"):
         _reply(event.reply_token, handle_todo(t, user_id))
     elif t.startswith("/記事") or t.startswith("/備忘"):
@@ -162,8 +173,9 @@ def on_file(event: MessageEvent):
     file_size = event.message.file_size or 0
 
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-    if ext not in ("pdf", "txt", "md", "csv"):
-        _reply(event.reply_token, f"⚠️ 目前支援 PDF、TXT、MD、CSV 格式\n收到的是：{filename}")
+    supported = ("pdf", "txt", "md", "csv", "docx", "pptx")
+    if ext not in supported:
+        _reply(event.reply_token, f"⚠️ 目前支援 PDF、TXT、MD、CSV、DOCX、PPTX 格式\n收到的是：{filename}")
         return
 
     if file_size > 20 * 1024 * 1024:
@@ -172,7 +184,10 @@ def on_file(event: MessageEvent):
 
     try:
         raw = bytes(line_bot_blob.get_message_content(event.message.id))
-        _reply(event.reply_token, analyze_file(user_id, raw, filename))
+        if ext in ("docx", "pptx"):
+            _reply(event.reply_token, analyze_meeting_file(user_id, raw, filename))
+        else:
+            _reply(event.reply_token, analyze_file(user_id, raw, filename))
     except Exception as e:
         logger.exception(f"文件分析錯誤: {e}")
         _reply(event.reply_token, f"⚠️ 文件分析失敗：{e}")
