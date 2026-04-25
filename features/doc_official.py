@@ -4,7 +4,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import db
-from config import anthropic_client, CLAUDE_MODEL, TZ_NAME
+from config import TZ_NAME
+from features.chat import simple_complete
 
 logger = logging.getLogger("lumio.doc_official")
 
@@ -54,11 +55,7 @@ def gen_official_doc(
     )
 
     try:
-        resp = anthropic_client.messages.create(
-            model=CLAUDE_MODEL, max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+        text = simple_complete(prompt, max_tokens=2000, with_system=False).strip()
         return f"📋 公文初稿：\n\n{text}\n\n（請自行調整文號、附件與發文日期）"
     except Exception as e:
         logger.warning(f"公文生成失敗: {e}")

@@ -3,7 +3,7 @@ import os
 import json
 import logging
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date
 
 import psycopg2
 from psycopg2 import pool

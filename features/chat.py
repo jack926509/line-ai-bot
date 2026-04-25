@@ -3,6 +3,7 @@ import re
 import base64
 import io
 import logging
+
 import db
 from config import anthropic_client, CLAUDE_MODEL
 from prompts import SYSTEM_PROMPT, build_date_block
@@ -23,6 +24,12 @@ _SUMMARIZE_PROMPT = (
     "語氣溫暖專業，如同秘書幫老闆整理會議前必讀摘要。"
 )
 
+# Sonnet 4.6 定價參考（USD / 1M tokens）
+_PRICE = {"in": 3.0, "cache_write": 3.75, "cache_read": 0.30, "out": 15.0}
+
+# 共用之 system cache block：所有單次任務（PDF 摘要 / 文字摘要 / 公文）共用，可命中 cache
+_CACHED_SYS_BLOCK = {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+
 
 def _with_cache(items: list[dict]) -> list[dict]:
     """於序列最後一個元素加 cache_control，避免綁定特定索引"""
@@ -34,21 +41,14 @@ def _with_cache(items: list[dict]) -> list[dict]:
 # 靜態工具列表 cache（約 2000 token，5 分鐘 TTL）
 _TOOLS_CACHED = _with_cache(TOOLS)
 
-# Sonnet 4.6 定價參考（USD / 1M tokens）
-_PRICE = {"in": 3.0, "cache_write": 3.75, "cache_read": 0.30, "out": 15.0}
-
 
 def _build_system() -> list[dict]:
-    """靜態 SYSTEM_PROMPT 加 cache；動態日期區塊每次重算但 token 少"""
-    return [
-        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": build_date_block()},
-    ]
+    """完整對話用 system：靜態 cache block + 動態日期區塊（每次重算但 token 少）"""
+    return [_CACHED_SYS_BLOCK, {"type": "text", "text": build_date_block()}]
 
 
 def _cache_history_tail(messages: list[dict]) -> list[dict]:
-    """於對話歷史最後一則訊息的最後一個 content block 加 cache breakpoint，
-    使後續請求可命中至此處的歷史快取。"""
+    """對話歷史最後一則訊息之最後 content block 加 cache breakpoint。"""
     if not messages:
         return messages
     last = dict(messages[-1])
@@ -65,18 +65,31 @@ def _log_usage(usage, call_n: int) -> None:
     cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
     cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
     regular_in = usage.input_tokens - cache_read
-    out = usage.output_tokens
     cost = (
         regular_in * _PRICE["in"] +
         cache_write * _PRICE["cache_write"] +
         cache_read * _PRICE["cache_read"] +
-        out * _PRICE["out"]
+        usage.output_tokens * _PRICE["out"]
     ) / 1_000_000
     logger.info(
-        f"Claude #{call_n} in={usage.input_tokens} "
-        f"cache_write={cache_write} cache_read={cache_read} "
-        f"out={out} ≈${cost:.5f}"
+        f"Claude #{call_n} in={usage.input_tokens} cache_write={cache_write} "
+        f"cache_read={cache_read} out={usage.output_tokens} ≈${cost:.5f}"
     )
+
+
+def simple_complete(prompt: str, max_tokens: int = 1200, with_system: bool = True) -> str:
+    """一次性 Claude 呼叫（無工具、無對話歷史）。
+    供文件摘要、公文生成、會議紀錄整理等短任務共用。"""
+    kwargs: dict = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if with_system:
+        kwargs["system"] = [_CACHED_SYS_BLOCK]
+    resp = anthropic_client.messages.create(**kwargs)
+    _log_usage(resp.usage, 1)
+    return strip_markdown("".join(getattr(b, "text", "") for b in resp.content))
 
 
 def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
@@ -118,8 +131,7 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
         _log_usage(response.usage, i + 2)
 
     reply = "".join(getattr(b, "text", "") for b in response.content)
-    reply = reply or "抱歉，我暫時無法回應，請再試一次～"
-    reply = _strip_markdown(reply)
+    reply = strip_markdown(reply or "抱歉，我暫時無法回應，請再試一次～")
     db.save_message(user_id, "assistant", reply)
     return reply
 
@@ -138,12 +150,11 @@ def analyze_file(user_id: str, file_bytes: bytes, filename: str) -> str:
             reply = _analyze_pdf(file_bytes, filename)
         else:
             text = file_bytes.decode("utf-8", errors="replace")
-            reply = _call_claude_text(_SUMMARIZE_PROMPT.format(filename=filename), text[:15000])
+            reply = simple_complete(_SUMMARIZE_PROMPT.format(filename=filename) + "\n\n" + text[:15000])
     except Exception as e:
         logger.exception(f"文件分析失敗: {e}")
         return f"⚠️ 文件分析失敗：{e}"
 
-    # 存入對話記憶，後續可追問
     db.save_message(user_id, "user", f"[📄 上傳文件：{filename}（{size_mb:.1f}MB）]")
     db.save_message(user_id, "assistant", reply)
     return reply
@@ -154,35 +165,30 @@ def _analyze_pdf(file_bytes: bytes, filename: str) -> str:
         # 小檔案：直接送 Claude，保留完整排版與圖表理解能力
         pdf_b64 = base64.b64encode(file_bytes).decode()
         content = [
-            {
-                "type": "document",
-                "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
-            },
+            {"type": "document",
+             "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
             {"type": "text", "text": _SUMMARIZE_PROMPT.format(filename=filename)},
         ]
         resp = anthropic_client.messages.create(
             model=CLAUDE_MODEL, max_tokens=1500,
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            system=[_CACHED_SYS_BLOCK],
             messages=[{"role": "user", "content": content}],
         )
         _log_usage(resp.usage, 1)
-    else:
-        # 大檔案：pypdf 提取文字再送 Claude
-        text = _extract_pdf_text(file_bytes)
-        if not text.strip():
-            return "⚠️ 無法提取 PDF 文字（可能是純圖片掃描版），請傳送可選取文字的 PDF"
-        resp = anthropic_client.messages.create(
-            model=CLAUDE_MODEL, max_tokens=1500,
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": _SUMMARIZE_PROMPT.format(filename=filename) + f"\n\n文件內容：\n{text[:12000]}"}],
-        )
-        _log_usage(resp.usage, 1)
+        return strip_markdown("".join(getattr(b, "text", "") for b in resp.content))
 
-    return _strip_markdown("".join(getattr(b, "text", "") for b in resp.content))
+    # 大檔案：pypdf 提取文字再送 Claude
+    text = _extract_pdf_text(file_bytes)
+    if not text.strip():
+        return "⚠️ 無法提取 PDF 文字（可能是純圖片掃描版），請傳送可選取文字的 PDF"
+    return simple_complete(
+        _SUMMARIZE_PROMPT.format(filename=filename) + f"\n\n文件內容：\n{text[:12000]}",
+        max_tokens=1500,
+    )
 
 
 def _extract_pdf_text(file_bytes: bytes) -> str:
-    """用 pypdf 提取 PDF 文字（處理大檔案，最多 40 頁）"""
+    """用 pypdf 提取 PDF 文字（最多 40 頁）"""
     from pypdf import PdfReader
     reader = PdfReader(io.BytesIO(file_bytes))
     pages = []
@@ -193,17 +199,8 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     return "\n\n".join(pages)
 
 
-def _call_claude_text(prompt: str, content: str) -> str:
-    resp = anthropic_client.messages.create(
-        model=CLAUDE_MODEL, max_tokens=1200,
-        system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"{prompt}\n\n{content}"}],
-    )
-    _log_usage(resp.usage, 1)
-    return _strip_markdown("".join(getattr(b, "text", "") for b in resp.content))
-
-
-def _strip_markdown(text: str) -> str:
+def strip_markdown(text: str) -> str:
+    """LINE 不支援 Markdown，於 Claude 輸出後做最終清理。"""
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'__(.+?)__', r'\1', text)
     text = re.sub(r'(?<!\w)\*([^*\n]+?)\*(?!\w)', r'\1', text)
@@ -216,3 +213,7 @@ def _strip_markdown(text: str) -> str:
 
     text = re.sub(r'`([^`]+?)`', r'\1', text)
     return text
+
+
+# 向後相容別名（避免破壞跨模組 import）
+_strip_markdown = strip_markdown

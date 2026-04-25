@@ -55,6 +55,11 @@ def _fmt_event(ev: dict) -> str:
     return line
 
 
+def _ensure_tz(iso: str) -> str:
+    """為 ISO datetime 補 +08:00 時區（含 'T' 但無時區尾碼時才補）"""
+    return iso + "+08:00" if iso and "T" in iso and not iso.endswith("+08:00") else iso
+
+
 def _format_match_list(events: list[dict], action: str) -> str:
     """多筆匹配時列出供使用者再次指定"""
     lines = [f"⚠️ 找到 {len(events)} 筆相符行程，請加日期或更精準關鍵字後重新{action}："]
@@ -173,13 +178,10 @@ def add_event(title: str, start_time: str, end_time: str | None = None,
                 "end": {"date": end_time or start_time},
             }
         else:
-            if "T" in start_time and not start_time.endswith("+08:00"):
-                start_time += "+08:00"
-            if end_time:
-                if "T" in end_time and not end_time.endswith("+08:00"):
-                    end_time += "+08:00"
-            else:
-                end_time = (datetime.fromisoformat(start_time) + timedelta(hours=1)).isoformat()
+            start_time = _ensure_tz(start_time)
+            end_time = _ensure_tz(end_time) if end_time else (
+                datetime.fromisoformat(start_time) + timedelta(hours=1)
+            ).isoformat()
 
             conflicts = _find_conflicts(service, start_time, end_time)
             if conflicts:
@@ -250,13 +252,10 @@ def update_event(event_title: str, date_str: str | None = None,
                 patch["start"] = {"date": new_start}
                 patch["end"] = {"date": new_end or new_start}
             else:
-                if "T" in new_start and not new_start.endswith("+08:00"):
-                    new_start += "+08:00"
-                if new_end:
-                    if "T" in new_end and not new_end.endswith("+08:00"):
-                        new_end += "+08:00"
-                else:
-                    new_end = (datetime.fromisoformat(new_start) + timedelta(hours=1)).isoformat()
+                new_start = _ensure_tz(new_start)
+                new_end = _ensure_tz(new_end) if new_end else (
+                    datetime.fromisoformat(new_start) + timedelta(hours=1)
+                ).isoformat()
                 patch["start"] = {"dateTime": new_start, "timeZone": TZ_NAME}
                 patch["end"] = {"dateTime": new_end, "timeZone": TZ_NAME}
 
@@ -308,10 +307,8 @@ def check_free_busy(start_time: str, end_time: str) -> str:
     if not service:
         return "⚠️ Google Calendar 未設定"
     try:
-        if "T" in start_time and not start_time.endswith("+08:00"):
-            start_time += "+08:00"
-        if "T" in end_time and not end_time.endswith("+08:00"):
-            end_time += "+08:00"
+        start_time = _ensure_tz(start_time)
+        end_time = _ensure_tz(end_time)
 
         result = service.freebusy().query(body={
             "timeMin": start_time, "timeMax": end_time,

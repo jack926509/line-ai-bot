@@ -81,8 +81,3 @@ def build_date_block() -> str:
     if holiday:
         block += f"{holiday}\n"
     return block
-
-
-def build_system_prompt() -> str:
-    """完整 system prompt（向後相容用）"""
-    return build_date_block() + "\n" + SYSTEM_PROMPT

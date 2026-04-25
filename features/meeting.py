@@ -3,8 +3,7 @@ import io
 import logging
 
 import db
-from config import anthropic_client, CLAUDE_MODEL
-from features.chat import _strip_markdown
+from features.chat import simple_complete
 
 logger = logging.getLogger("lumio.meeting")
 
@@ -26,7 +25,6 @@ def extract_docx(file_bytes: bytes) -> str:
     from docx import Document
     doc = Document(io.BytesIO(file_bytes))
     paras = [p.text for p in doc.paragraphs if p.text.strip()]
-    # 表格內容
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -49,17 +47,6 @@ def extract_pptx(file_bytes: bytes) -> str:
     return "\n".join(out)
 
 
-def _summarize(text: str, filename: str) -> str:
-    if not text.strip():
-        return "⚠️ 文件內容為空或無法解析"
-    resp = anthropic_client.messages.create(
-        model=CLAUDE_MODEL, max_tokens=1500,
-        messages=[{"role": "user", "content": _PROMPT.format(filename=filename, content=text[:15000])}],
-    )
-    text_out = "".join(getattr(b, "text", "") for b in resp.content)
-    return _strip_markdown(text_out)
-
-
 def analyze_meeting_file(user_id: str, file_bytes: bytes, filename: str) -> str:
     """解析會議紀錄類文件並整理；同時寫入對話記憶以便後續追問。"""
     size_mb = len(file_bytes) / 1024 / 1024
@@ -79,7 +66,10 @@ def analyze_meeting_file(user_id: str, file_bytes: bytes, filename: str) -> str:
         logger.exception(f"文件解析失敗 {filename}: {e}")
         return f"⚠️ 文件解析失敗：{e}"
 
-    reply = _summarize(text, filename)
+    if not text.strip():
+        return "⚠️ 文件內容為空或無法解析"
+
+    reply = simple_complete(_PROMPT.format(filename=filename, content=text[:15000]), max_tokens=1500)
     db.save_message(user_id, "user", f"[📄 上傳會議紀錄：{filename}（{size_mb:.1f}MB）]")
     db.save_message(user_id, "assistant", reply)
     return reply
