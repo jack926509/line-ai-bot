@@ -20,6 +20,17 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# 啟動時提早警告必填環境變數，避免延遲到請求時才報錯
+_REQUIRED_ENV = {
+    "LINE_CHANNEL_ACCESS_TOKEN": LINE_CHANNEL_ACCESS_TOKEN,
+    "LINE_CHANNEL_SECRET": LINE_CHANNEL_SECRET,
+    "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
+    "DATABASE_URL": os.getenv("DATABASE_URL"),
+}
+for _name, _val in _REQUIRED_ENV.items():
+    if not _val:
+        logger.warning(f"⚠️ 環境變數 {_name} 未設定，相關功能將失效")
+
 # ─── 共用常數 ───
 CLAUDE_MODEL = "claude-sonnet-4-6"
 CLAUDE_MODEL_LIGHT = "claude-haiku-4-5-20251001"

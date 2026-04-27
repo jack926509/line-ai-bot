@@ -37,6 +37,8 @@ def trip_create(
 
     gcal_ids = []
     written = 0
+    skipped: list[str] = []
+    failed: list[str] = []
     for p in places or []:
         try:
             day = int(p.get("day", 1))
@@ -46,8 +48,12 @@ def trip_create(
             location = p.get("location") or place_name
             if not place_name:
                 continue
+            if day < 1:
+                skipped.append(f"D{day} {place_name}（日序須 ≥ 1）")
+                continue
             ev_date = sd + timedelta(days=day - 1)
             if ev_date > ed:
+                skipped.append(f"D{day} {place_name}（超出旅程結束日 {end_date}）")
                 continue
 
             title = f"[{name}] {place_name}"
@@ -74,14 +80,28 @@ def trip_create(
             written += 1
         except Exception as e:
             logger.warning(f"寫入 GCal 失敗 place={p}: {e}")
+            failed.append(f"D{p.get('day', '?')} {p.get('name', '')}：{e}")
 
     trip_id = db.add_trip(user_id, name, start_date, end_date, places, gcal_ids)
-    return (
-        f"✈️ 旅程已建立：「{name}」\n"
-        f"📅 {start_date} ~ {end_date}\n"
-        f"📍 {written} / {len(places)} 個地點已寫入 Google Calendar\n"
-        f"trip #{trip_id} — 用「我的旅程」或 /旅遊 查看"
-    )
+    lines = [
+        f"✈️ 旅程已建立:「{name}」",
+        f"📅 {start_date} ~ {end_date}",
+        f"📍 {written} / {len(places)} 個地點已寫入 Google Calendar",
+    ]
+    if skipped:
+        lines.append("")
+        lines.append(f"⚠️ 已跳過 {len(skipped)} 個地點:")
+        for s in skipped[:5]:
+            lines.append(f"  • {s}")
+        if len(skipped) > 5:
+            lines.append(f"  …另有 {len(skipped) - 5} 個未列出")
+    if failed:
+        lines.append("")
+        lines.append(f"⚠️ {len(failed)} 個地點寫入失敗:")
+        for f in failed[:3]:
+            lines.append(f"  • {f}")
+    lines.append(f"trip #{trip_id} — 用「我的旅程」或 /旅遊 查看")
+    return "\n".join(lines)
 
 
 def trip_list(user_id: str) -> str:

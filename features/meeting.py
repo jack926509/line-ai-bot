@@ -3,7 +3,7 @@ import io
 import logging
 
 import db
-from features.chat import simple_complete
+from features.chat import chunked_summarize
 
 logger = logging.getLogger("lumio.meeting")
 
@@ -69,7 +69,7 @@ def analyze_meeting_file(user_id: str, file_bytes: bytes, filename: str) -> str:
     if not text.strip():
         return "⚠️ 文件內容為空或無法解析"
 
-    reply = simple_complete(_PROMPT.format(filename=filename, content=text[:15000]), max_tokens=1500)
+    reply = chunked_summarize(text, _PROMPT.replace("{filename}", filename), max_tokens=1500)
     db.save_message(user_id, "user", f"[📄 上傳會議紀錄：{filename}（{size_mb:.1f}MB）]")
     db.save_message(user_id, "assistant", reply)
     return reply
