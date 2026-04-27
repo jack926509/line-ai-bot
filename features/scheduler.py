@@ -1,5 +1,6 @@
 """APScheduler 定時任務集中管理"""
 import logging
+from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -7,10 +8,29 @@ from apscheduler.triggers.cron import CronTrigger
 
 import db
 from config import TZ_NAME, BRIEF_HOUR, BRIEF_MINUTE, DISABLE_SCHEDULER
+from db.pool import get_db
 
 logger = logging.getLogger("lumio.scheduler")
 
 _scheduler: BackgroundScheduler | None = None
+
+# Advisory lock keys（任意常數，需於所有副本一致）
+_LOCK_BRIEFING = 7301_001
+_LOCK_CLEANUP = 7301_002
+
+
+@contextmanager
+def _advisory_lock(key: int):
+    """以 PG advisory lock 確保多副本部署時同任務只有一節點執行。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+        acquired = bool(cur.fetchone()[0])
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (key,))
 
 
 def start_scheduler() -> None:
@@ -29,6 +49,14 @@ def start_scheduler() -> None:
         id="morning_briefing",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+    # 每日 03:30 清理超過 90 天的推播紀錄
+    _scheduler.add_job(
+        _cleanup_job,
+        CronTrigger(hour=3, minute=30),
+        id="push_log_cleanup",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
     _scheduler.start()
     logger.info(f"排程器啟動：早晨簡報 {BRIEF_HOUR:02d}:{BRIEF_MINUTE:02d} ({TZ_NAME})")
@@ -65,19 +93,39 @@ def register_one_off(when, callback, args: list | None = None, job_id: str | Non
 
 
 def _morning_briefing_job() -> None:
-    """每日 08:00 觸發：對所有訂閱簡報之使用者推送。"""
+    """每日 08:00 觸發：對所有訂閱簡報之使用者推送。
+
+    多副本部署時，僅持有 PG advisory lock 之節點實際執行；
+    push_log 為次層去重保險（同 user_id+kind+ref_date 唯一）。
+    """
     from features.briefing import build_morning_briefing
     from features.push import push_text
 
-    subs = db.get_briefing_subscribers()
-    logger.info(f"執行早晨簡報推送，訂閱數={len(subs)}")
-    for uid in subs:
-        if db.has_pushed_today(uid, "briefing"):
-            continue
+    with _advisory_lock(_LOCK_BRIEFING) as acquired:
+        if not acquired:
+            logger.info("簡報任務 advisory lock 未取得，跳過（其他節點執行中）")
+            return
+
+        subs = db.get_briefing_subscribers()
+        logger.info(f"執行早晨簡報推送，訂閱數={len(subs)}")
+        for uid in subs:
+            if db.has_pushed_today(uid, "briefing"):
+                continue
+            try:
+                msg = build_morning_briefing(uid)
+                if push_text(uid, msg):
+                    db.mark_pushed(uid, "briefing")
+                    logger.info(f"簡報已推送 user={uid}")
+            except Exception as e:
+                logger.exception(f"簡報失敗 user={uid}: {e}")
+
+
+def _cleanup_job() -> None:
+    """定期清理推播紀錄；advisory lock 確保多副本下只有一節點執行。"""
+    with _advisory_lock(_LOCK_CLEANUP) as acquired:
+        if not acquired:
+            return
         try:
-            msg = build_morning_briefing(uid)
-            if push_text(uid, msg):
-                db.mark_pushed(uid, "briefing")
-                logger.info(f"簡報已推送 user={uid}")
+            db.cleanup_push_log(retention_days=90)
         except Exception as e:
-            logger.exception(f"簡報失敗 user={uid}: {e}")
+            logger.warning(f"push_log 清理失敗: {e}")

@@ -1,6 +1,6 @@
 """待辦事項：slash command 與自然語言函式"""
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import db
@@ -76,8 +76,15 @@ def _parse_todo_input(text: str) -> tuple[str, str, str | None]:
         dm = re.match(r"(\d{1,2})/(\d{1,2})\s+", content)
         if dm:
             mo, d = int(dm.group(1)), int(dm.group(2))
-            year = now.year if mo >= now.month else now.year + 1
-            due_date = f"{year}-{mo:02d}-{d:02d}"
+            # 若指定的 (月, 日) 已過今天則自動推到明年
+            today = now.date()
+            try:
+                target = date(today.year, mo, d)
+            except ValueError:
+                return content.strip(), category, None
+            if target < today:
+                target = date(today.year + 1, mo, d)
+            due_date = target.strftime("%Y-%m-%d")
             content = content[dm.end():]
 
     return content.strip(), category, due_date

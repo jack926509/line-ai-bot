@@ -13,26 +13,47 @@ _cached_service = None
 
 _WEEKDAY = ["一", "二", "三", "四", "五", "六", "日"]
 
+# 修改／刪除行程的搜尋範圍：未指定日期時自今天起 90 天
+_SEARCH_DAYS = 90
+
 
 # ── Google Calendar 服務 ──────────────────────────
 
 
+_creds_warned = False
+
+
 def _get_service():
-    global _cached_service
+    global _cached_service, _creds_warned
     if _cached_service is not None:
         return _cached_service
     creds_json = os.getenv("GOOGLE_CALENDAR_CREDENTIALS", "")
     if not creds_json:
+        if not _creds_warned:
+            logger.warning(
+                "GOOGLE_CALENDAR_CREDENTIALS 未設定，所有 Google Calendar 功能停用"
+            )
+            _creds_warned = True
         return None
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
         info = json.loads(creds_json)
+        # 基本完整性檢查：service account JSON 必含這些欄位
+        for key in ("type", "client_email", "private_key"):
+            if key not in info:
+                logger.warning(
+                    f"GOOGLE_CALENDAR_CREDENTIALS 內容無效：缺欄位 {key}"
+                )
+                return None
         creds = service_account.Credentials.from_service_account_info(
             info, scopes=["https://www.googleapis.com/auth/calendar"]
         )
         _cached_service = build("calendar", "v3", credentials=creds)
         return _cached_service
+    except json.JSONDecodeError as e:
+        logger.warning(f"GOOGLE_CALENDAR_CREDENTIALS 不是有效 JSON: {e}")
+        return None
     except Exception as e:
         logger.warning(f"Google Calendar 初始化失敗：{e}")
         return None
@@ -84,7 +105,8 @@ def _find_conflicts(service, start_iso: str, end_iso: str) -> list[str]:
             singleEvents=True, timeZone=TZ_NAME,
         ).execute()
         return [ev.get("summary", "（無標題）") for ev in result.get("items", [])]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"衝突檢查失敗: {e}")
         return []
 
 
@@ -127,6 +149,7 @@ def get_events(date_str: str | None = None, days: int = 1) -> str:
         header = "📅 行程查詢：" if date_str else "📅 今日行程："
         return header + "\n".join(lines)
     except Exception as e:
+        logger.warning(f"行程查詢失敗: {e}")
         return f"⚠️ 行程查詢失敗：{e}"
 
 
@@ -159,6 +182,7 @@ def get_upcoming_events(count: int = 5) -> str:
             lines.append(_fmt_event(ev))
         return "\n".join(lines)
     except Exception as e:
+        logger.warning(f"upcoming 行程查詢失敗: {e}")
         return f"⚠️ 查詢失敗：{e}"
 
 
@@ -212,6 +236,7 @@ def add_event(title: str, start_time: str, end_time: str | None = None,
             result += f"\n📍 {location}"
         return result + conflict_warning
     except Exception as e:
+        logger.warning(f"行程新增失敗 title={title}: {e}")
         return f"⚠️ 行程新增失敗：{e}"
 
 
@@ -226,7 +251,7 @@ def update_event(event_title: str, date_str: str | None = None,
         now = datetime.now(ZoneInfo(TZ_NAME))
         base = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=ZoneInfo(TZ_NAME)) if date_str else now
         time_min = base.replace(hour=0, minute=0, second=0).isoformat()
-        time_max = (base + timedelta(days=30)).isoformat()
+        time_max = (base + timedelta(days=_SEARCH_DAYS)).isoformat()
 
         result = service.events().list(
             calendarId=_cal_id(), timeMin=time_min, timeMax=time_max,
@@ -234,7 +259,10 @@ def update_event(event_title: str, date_str: str | None = None,
         ).execute()
         events = result.get("items", [])
         if not events:
-            return f"⚠️ 找不到「{event_title}」（搜尋範圍：今天起 30 天）"
+            return (
+                f"⚠️ 找不到「{event_title}」\n"
+                f"（搜尋範圍：今天起 {_SEARCH_DAYS} 天；如為更遠日期，請補上日期再試）"
+            )
         if len(events) > 1 and not date_str:
             return _format_match_list(events, "修改")
 
@@ -272,6 +300,7 @@ def update_event(event_title: str, date_str: str | None = None,
             lines.append(f"📍 {new_location}")
         return "\n".join(lines)
     except Exception as e:
+        logger.warning(f"行程更新失敗 title={event_title}: {e}")
         return f"⚠️ 行程更新失敗：{e}"
 
 
@@ -283,7 +312,7 @@ def delete_event(event_title: str, date_str: str | None = None) -> str:
         now = datetime.now(ZoneInfo(TZ_NAME))
         base = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=ZoneInfo(TZ_NAME)) if date_str else now
         start = base.replace(hour=0, minute=0, second=0).isoformat()
-        end = (base + timedelta(days=30)).isoformat()
+        end = (base + timedelta(days=_SEARCH_DAYS)).isoformat()
 
         result = service.events().list(
             calendarId=_cal_id(), timeMin=start, timeMax=end,
@@ -291,7 +320,10 @@ def delete_event(event_title: str, date_str: str | None = None) -> str:
         ).execute()
         events = result.get("items", [])
         if not events:
-            return f"⚠️ 找不到「{event_title}」"
+            return (
+                f"⚠️ 找不到「{event_title}」\n"
+                f"（搜尋範圍：今天起 {_SEARCH_DAYS} 天；如為更遠日期，請補上日期再試）"
+            )
         if len(events) > 1 and not date_str:
             return _format_match_list(events, "刪除")
 
@@ -299,6 +331,7 @@ def delete_event(event_title: str, date_str: str | None = None) -> str:
         service.events().delete(calendarId=_cal_id(), eventId=ev["id"]).execute()
         return f"🗑 已刪除行程：「{ev.get('summary', event_title)}」"
     except Exception as e:
+        logger.warning(f"行程刪除失敗 title={event_title}: {e}")
         return f"⚠️ 行程刪除失敗：{e}"
 
 
@@ -329,6 +362,7 @@ def check_free_busy(start_time: str, end_time: str) -> str:
             lines.append(f"  ⏰ {bs.strftime('%H:%M')}~{be.strftime('%H:%M')}")
         return "\n".join(lines)
     except Exception as e:
+        logger.warning(f"freebusy 查詢失敗: {e}")
         return f"⚠️ 查詢失敗：{e}"
 
 
@@ -358,8 +392,14 @@ def handle_cal(t: str) -> str:
     m = re.match(r"(\d{1,2})/(\d{1,2})$", arg)
     if m:
         mo, d = int(m.group(1)), int(m.group(2))
-        year = now.year if mo >= now.month else now.year + 1
-        return get_events(date_str=f"{year}-{mo:02d}-{d:02d}")
+        today = now.date()
+        try:
+            target = datetime(today.year, mo, d).date()
+        except ValueError:
+            return f"⚠️ 無效日期：{arg}"
+        if target < today:
+            target = datetime(today.year + 1, mo, d).date()
+        return get_events(date_str=target.strftime("%Y-%m-%d"))
 
     return (
         "📅 /日曆 用法：\n"

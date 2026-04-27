@@ -5,7 +5,7 @@ import io
 import logging
 
 import db
-from config import anthropic_client, CLAUDE_MODEL
+from config import anthropic_client, CLAUDE_MODEL, CLAUDE_MODEL_LIGHT
 from prompts import SYSTEM_PROMPT, build_date_block
 from features.tools import TOOLS, dispatch_tool
 
@@ -15,6 +15,11 @@ logger = logging.getLogger("lumio.chat")
 _PDF_INLINE_MAX = 4 * 1024 * 1024   # ≤ 4MB → 直接送 Claude（保留排版/表格）
 _FILE_SIZE_MAX  = 20 * 1024 * 1024  # > 20MB → 拒絕
 
+# 長文件分段門檻（單次摘要送 Claude 的字元上限）
+_SINGLE_PASS_LIMIT = 15000
+# 分段時每段大小（字元），預留 prompt 額外字數空間
+_CHUNK_SIZE = 12000
+
 _SUMMARIZE_PROMPT = (
     "請用繁體中文摘要這份文件「{filename}」的重點內容。\n"
     "格式：\n"
@@ -23,6 +28,8 @@ _SUMMARIZE_PROMPT = (
     "③需要注意或後續行動的事項（如有）\n\n"
     "語氣溫暖專業，如同秘書幫老闆整理會議前必讀摘要。"
 )
+
+_SUMMARIZE_TEMPLATE = _SUMMARIZE_PROMPT + "\n\n文件內容：\n{content}"
 
 # Sonnet 4.6 定價參考（USD / 1M tokens）
 _PRICE = {"in": 3.0, "cache_write": 3.75, "cache_read": 0.30, "out": 15.0}
@@ -77,11 +84,12 @@ def _log_usage(usage, call_n: int) -> None:
     )
 
 
-def simple_complete(prompt: str, max_tokens: int = 1200, with_system: bool = True) -> str:
+def simple_complete(prompt: str, max_tokens: int = 1200, with_system: bool = True,
+                    model: str | None = None) -> str:
     """一次性 Claude 呼叫（無工具、無對話歷史）。
     供文件摘要、公文生成、會議紀錄整理等短任務共用。"""
     kwargs: dict = {
-        "model": CLAUDE_MODEL,
+        "model": model or CLAUDE_MODEL,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -90,6 +98,58 @@ def simple_complete(prompt: str, max_tokens: int = 1200, with_system: bool = Tru
     resp = anthropic_client.messages.create(**kwargs)
     _log_usage(resp.usage, 1)
     return strip_markdown("".join(getattr(b, "text", "") for b in resp.content))
+
+
+def _split_text(text: str, chunk_size: int) -> list[str]:
+    """以段落為界切分，避免硬切斷句子。"""
+    if len(text) <= chunk_size:
+        return [text]
+    chunks: list[str] = []
+    paragraphs = re.split(r"\n\s*\n", text)
+    buf = ""
+    for p in paragraphs:
+        if not p.strip():
+            continue
+        candidate = (buf + "\n\n" + p) if buf else p
+        if len(candidate) <= chunk_size:
+            buf = candidate
+            continue
+        if buf:
+            chunks.append(buf)
+        # 單段超過 chunk_size：強制切割
+        while len(p) > chunk_size:
+            chunks.append(p[:chunk_size])
+            p = p[chunk_size:]
+        buf = p
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+def chunked_summarize(text: str, final_prompt: str, max_tokens: int = 1500) -> str:
+    """長文 map-reduce 摘要：超過上限時分段先粗摘，再合成最終回應。
+
+    final_prompt 必須含 "{content}" 佔位符，會被替換為原文（短）或階段性摘要（長）。
+    """
+    if len(text) <= _SINGLE_PASS_LIMIT:
+        return simple_complete(final_prompt.format(content=text), max_tokens=max_tokens)
+
+    chunks = _split_text(text, _CHUNK_SIZE)
+    logger.info(f"長文分段摘要：{len(text)} 字 → {len(chunks)} 段")
+
+    partials: list[str] = []
+    for i, chunk in enumerate(chunks, 1):
+        prompt = (
+            f"以下是長文件第 {i}/{len(chunks)} 段，請以繁體中文擷取重點（條列、純文字、禁用 Markdown），"
+            f"保留人事時地物、決議與數字：\n\n{chunk}"
+        )
+        partial = simple_complete(prompt, max_tokens=800, model=CLAUDE_MODEL_LIGHT)
+        partials.append(f"[第 {i} 段重點]\n{partial}")
+
+    merged = "\n\n".join(partials)
+    if len(merged) > _SINGLE_PASS_LIMIT:
+        merged = merged[:_SINGLE_PASS_LIMIT]
+    return simple_complete(final_prompt.format(content=merged), max_tokens=max_tokens)
 
 
 def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
@@ -150,7 +210,11 @@ def analyze_file(user_id: str, file_bytes: bytes, filename: str) -> str:
             reply = _analyze_pdf(file_bytes, filename)
         else:
             text = file_bytes.decode("utf-8", errors="replace")
-            reply = simple_complete(_SUMMARIZE_PROMPT.format(filename=filename) + "\n\n" + text[:15000])
+            reply = chunked_summarize(
+                text,
+                _SUMMARIZE_TEMPLATE.replace("{filename}", filename),
+                max_tokens=1500,
+            )
     except Exception as e:
         logger.exception(f"文件分析失敗: {e}")
         return f"⚠️ 文件分析失敗：{e}"
@@ -177,12 +241,13 @@ def _analyze_pdf(file_bytes: bytes, filename: str) -> str:
         _log_usage(resp.usage, 1)
         return strip_markdown("".join(getattr(b, "text", "") for b in resp.content))
 
-    # 大檔案：pypdf 提取文字再送 Claude
+    # 大檔案：pypdf 提取文字再送 Claude（必要時自動分段摘要）
     text = _extract_pdf_text(file_bytes)
     if not text.strip():
         return "⚠️ 無法提取 PDF 文字（可能是純圖片掃描版），請傳送可選取文字的 PDF"
-    return simple_complete(
-        _SUMMARIZE_PROMPT.format(filename=filename) + f"\n\n文件內容：\n{text[:12000]}",
+    return chunked_summarize(
+        text,
+        _SUMMARIZE_TEMPLATE.replace("{filename}", filename),
         max_tokens=1500,
     )
 

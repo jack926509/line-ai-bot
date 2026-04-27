@@ -1,5 +1,7 @@
 """LINE AI Bot — Lumio（FastAPI 入口）"""
 import base64
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
@@ -25,6 +27,29 @@ from features.doc_official import handle_template
 from features.law import law_search
 from features.trip import handle_trip
 from features.meeting import analyze_meeting_file
+from features.push import push_text
+
+
+# ── Reply token / Rate limit ─────────────────────
+# LINE reply token TTL 約 30s，留 5s buffer 改走 push
+_REPLY_TTL_SECONDS = 25.0
+# 單使用者每分鐘訊息上限（單 worker 部署，記憶體計數即可）
+_RATE_LIMIT_WINDOW = 60.0
+_RATE_LIMIT_MAX = 15
+_user_hits: dict[str, deque] = defaultdict(deque)
+
+
+def _rate_limited(user_id: str) -> bool:
+    if not user_id:
+        return False
+    now = time.monotonic()
+    q = _user_hits[user_id]
+    while q and now - q[0] > _RATE_LIMIT_WINDOW:
+        q.popleft()
+    if len(q) >= _RATE_LIMIT_MAX:
+        return True
+    q.append(now)
+    return False
 
 
 # ── FastAPI Lifespan ──────────────────────────────
@@ -79,13 +104,20 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 # ── LINE 事件處理 ─────────────────────────────────
 
 
-def _reply(reply_token: str, msg: str) -> None:
+def _send(reply_token: str, user_id: str, msg: str, started_at: float | None = None) -> None:
+    """先嘗試 reply；若 token 已逼近 TTL 或回覆失敗，自動 fallback 到 Push API。"""
+    if started_at is not None and time.monotonic() - started_at > _REPLY_TTL_SECONDS:
+        logger.info(f"reply_token 逼近 TTL，改用 push user={user_id}")
+        push_text(user_id, msg)
+        return
     try:
         line_bot_api.reply_message(
             ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=msg)])
         )
     except Exception as e:
-        logger.warning(f"LINE 回覆失敗: {e}")
+        logger.warning(f"LINE reply 失敗，改用 push: {e}")
+        if user_id:
+            push_text(user_id, msg)
 
 
 def _build_status(user_id: str) -> str:
@@ -108,6 +140,7 @@ def _build_status(user_id: str) -> str:
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_text(event: MessageEvent):
+    started_at = time.monotonic()
     text = event.message.text
     user_id = event.source.user_id
     t = text.strip()
@@ -115,81 +148,100 @@ def on_text(event: MessageEvent):
     # 自動註冊訂閱（任何訊息均觸發）
     db.upsert_subscription(user_id)
 
+    if _rate_limited(user_id):
+        _send(event.reply_token, user_id,
+              "⚠️ 訊息頻率過高，請稍候片刻再試（每分鐘上限 15 則）", started_at)
+        return
+
     # ── 快捷指令（直接執行，不走 Claude）
     if t in ("/reset", "/清除記憶"):
-        _reply(event.reply_token, handle_reset_memory(user_id))
+        _send(event.reply_token, user_id, handle_reset_memory(user_id), started_at)
     elif t == "/簡報":
-        _reply(event.reply_token, build_morning_briefing(user_id))
+        _send(event.reply_token, user_id, build_morning_briefing(user_id), started_at)
     elif t in ("/簡報 開", "/簡報開"):
         db.set_briefing(user_id, True)
-        _reply(event.reply_token, "✅ 早晨簡報已開啟（每日 08:00 推送）")
+        _send(event.reply_token, user_id, "✅ 早晨簡報已開啟（每日 08:00 推送）", started_at)
     elif t in ("/簡報 關", "/簡報關"):
         db.set_briefing(user_id, False)
-        _reply(event.reply_token, "🔕 早晨簡報已關閉")
+        _send(event.reply_token, user_id, "🔕 早晨簡報已關閉", started_at)
     elif t in ("/狀態", "/status"):
-        _reply(event.reply_token, _build_status(user_id))
+        _send(event.reply_token, user_id, _build_status(user_id), started_at)
     elif t.startswith("/摘要 ") or t.startswith("/摘要\n"):
         url = t[3:].strip()
-        _reply(event.reply_token, summarize_url(url))
+        _send(event.reply_token, user_id, summarize_url(url), started_at)
     elif t.startswith("/範本"):
-        _reply(event.reply_token, handle_template(t, user_id))
+        _send(event.reply_token, user_id, handle_template(t, user_id), started_at)
     elif t.startswith("/法規 ") or t.startswith("/法規\n"):
         q = t[3:].strip()
-        _reply(event.reply_token, law_search(q) if q else "📜 用法：/法規 <關鍵字或條號>")
+        _send(event.reply_token, user_id,
+              law_search(q) if q else "📜 用法：/法規 <關鍵字或條號>", started_at)
     elif t.startswith("/旅遊"):
-        _reply(event.reply_token, handle_trip(t, user_id))
+        _send(event.reply_token, user_id, handle_trip(t, user_id), started_at)
     elif t.startswith("/待辦") or t.startswith("/t"):
-        _reply(event.reply_token, handle_todo(t, user_id))
+        _send(event.reply_token, user_id, handle_todo(t, user_id), started_at)
     elif t.startswith("/記事") or t.startswith("/備忘"):
-        _reply(event.reply_token, handle_note(t, user_id))
+        _send(event.reply_token, user_id, handle_note(t, user_id), started_at)
     elif t.startswith("/日曆") or t.startswith("/cal"):
-        _reply(event.reply_token, handle_cal(t))
+        _send(event.reply_token, user_id, handle_cal(t), started_at)
     elif t in ("/h", "/help"):
-        _reply(event.reply_token, handle_help())
+        _send(event.reply_token, user_id, handle_help(), started_at)
     else:
         try:
-            _reply(event.reply_token, ask_claude(user_id, t))
+            _send(event.reply_token, user_id, ask_claude(user_id, t), started_at)
         except Exception as e:
             logger.exception(f"Claude 呼叫錯誤: {e}")
-            _reply(event.reply_token, f"⚠️ 發生錯誤：{e}")
+            _send(event.reply_token, user_id, f"⚠️ 發生錯誤：{e}", started_at)
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
 def on_image(event: MessageEvent):
+    started_at = time.monotonic()
     user_id = event.source.user_id
     db.upsert_subscription(user_id)
+    if _rate_limited(user_id):
+        _send(event.reply_token, user_id,
+              "⚠️ 訊息頻率過高，請稍候片刻再試", started_at)
+        return
     try:
         raw = line_bot_blob.get_message_content(event.message.id)
         image_b64 = base64.b64encode(raw).decode("utf-8")
-        _reply(event.reply_token, ask_claude(user_id, "", image_b64))
+        _send(event.reply_token, user_id, ask_claude(user_id, "", image_b64), started_at)
     except Exception as e:
         logger.exception(f"圖片分析錯誤: {e}")
-        _reply(event.reply_token, f"⚠️ 圖片分析失敗：{e}")
+        _send(event.reply_token, user_id, f"⚠️ 圖片分析失敗：{e}", started_at)
 
 
 @handler.add(MessageEvent, message=FileMessageContent)
 def on_file(event: MessageEvent):
+    started_at = time.monotonic()
     user_id = event.source.user_id
     db.upsert_subscription(user_id)
+    if _rate_limited(user_id):
+        _send(event.reply_token, user_id,
+              "⚠️ 訊息頻率過高，請稍候片刻再試", started_at)
+        return
+
     filename = event.message.file_name or "document"
     file_size = event.message.file_size or 0
 
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     supported = ("pdf", "txt", "md", "csv", "docx", "pptx")
     if ext not in supported:
-        _reply(event.reply_token, f"⚠️ 目前支援 PDF、TXT、MD、CSV、DOCX、PPTX 格式\n收到的是：{filename}")
+        _send(event.reply_token, user_id,
+              f"⚠️ 目前支援 PDF、TXT、MD、CSV、DOCX、PPTX 格式\n收到的是：{filename}", started_at)
         return
 
     if file_size > 20 * 1024 * 1024:
-        _reply(event.reply_token, f"⚠️ 檔案太大（{file_size/1024/1024:.1f}MB），請上傳 20MB 以下的文件")
+        _send(event.reply_token, user_id,
+              f"⚠️ 檔案太大({file_size/1024/1024:.1f}MB),請上傳 20MB 以下的文件", started_at)
         return
 
     try:
         raw = bytes(line_bot_blob.get_message_content(event.message.id))
         if ext in ("docx", "pptx"):
-            _reply(event.reply_token, analyze_meeting_file(user_id, raw, filename))
+            _send(event.reply_token, user_id, analyze_meeting_file(user_id, raw, filename), started_at)
         else:
-            _reply(event.reply_token, analyze_file(user_id, raw, filename))
+            _send(event.reply_token, user_id, analyze_file(user_id, raw, filename), started_at)
     except Exception as e:
         logger.exception(f"文件分析錯誤: {e}")
-        _reply(event.reply_token, f"⚠️ 文件分析失敗：{e}")
+        _send(event.reply_token, user_id, f"⚠️ 文件分析失敗：{e}", started_at)
