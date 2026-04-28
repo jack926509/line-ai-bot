@@ -12,6 +12,19 @@ from db.templates import add_template, list_templates, delete_template
 from db.trips import add_trip, list_trips, delete_trip
 from db.processed_messages import is_processed, mark_processed, cleanup_processed_messages
 from db.token_usage import record_usage, get_usage_summary, cleanup_token_usage
+from db.user_profile import (
+    remember as profile_remember,
+    forget as profile_forget,
+    list_facts as profile_list,
+    clear_facts as profile_clear,
+)
+from db.workflows import (
+    add_workflow, list_workflows, cancel_workflow,
+    fetch_due as workflows_fetch_due,
+    mark_done as workflow_mark_done,
+    update_next_run as workflow_update_next_run,
+    cleanup_workflows,
+)
 
 __all__ = [
     "get_db", "DATABASE_URL", "init_db",
@@ -24,4 +37,8 @@ __all__ = [
     "add_trip", "list_trips", "delete_trip",
     "is_processed", "mark_processed", "cleanup_processed_messages",
     "record_usage", "get_usage_summary", "cleanup_token_usage",
+    "profile_remember", "profile_forget", "profile_list", "profile_clear",
+    "add_workflow", "list_workflows", "cancel_workflow",
+    "workflows_fetch_due", "workflow_mark_done", "workflow_update_next_run",
+    "cleanup_workflows",
 ]

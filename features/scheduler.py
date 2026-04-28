@@ -17,6 +17,7 @@ _scheduler: BackgroundScheduler | None = None
 # Advisory lock keys（任意常數，需於所有副本一致）
 _LOCK_BRIEFING = 7301_001
 _LOCK_CLEANUP = 7301_002
+_LOCK_REMINDER = 7301_003
 
 
 @contextmanager
@@ -57,6 +58,14 @@ def start_scheduler() -> None:
         id="push_log_cleanup",
         replace_existing=True,
         misfire_grace_time=3600,
+    )
+    # 每分鐘 tick 提醒到期工作流
+    _scheduler.add_job(
+        _reminder_tick_job,
+        CronTrigger(minute="*"),
+        id="reminder_tick",
+        replace_existing=True,
+        misfire_grace_time=60,
     )
     _scheduler.start()
     logger.info(f"排程器啟動：早晨簡報 {BRIEF_HOUR:02d}:{BRIEF_MINUTE:02d} ({TZ_NAME})")
@@ -137,3 +146,21 @@ def _cleanup_job() -> None:
             db.cleanup_token_usage(retention_days=365)
         except Exception as e:
             logger.warning(f"token_usage 清理失敗: {e}")
+        try:
+            db.cleanup_workflows(retention_days=30)
+        except Exception as e:
+            logger.warning(f"workflows 清理失敗: {e}")
+
+
+def _reminder_tick_job() -> None:
+    """每分鐘觸發到期提醒；advisory lock 防多副本重送。"""
+    from features.workflow import tick
+    with _advisory_lock(_LOCK_REMINDER) as acquired:
+        if not acquired:
+            return
+        try:
+            n = tick()
+            if n:
+                logger.info(f"reminder tick 處理 {n} 筆")
+        except Exception as e:
+            logger.warning(f"reminder tick 失敗: {e}")

@@ -6,7 +6,7 @@ import logging
 
 import db
 from config import anthropic_client, CLAUDE_MODEL, CLAUDE_MODEL_LIGHT
-from prompts import SYSTEM_PROMPT, build_date_block
+from prompts import SYSTEM_PROMPT, build_date_block, build_profile_block
 from features.tools import TOOLS, dispatch_tool
 
 logger = logging.getLogger("lumio.chat")
@@ -56,9 +56,24 @@ def _with_cache(items: list[dict]) -> list[dict]:
 _TOOLS_CACHED = _with_cache(TOOLS)
 
 
-def _build_system() -> list[dict]:
-    """完整對話用 system：靜態 cache block + 動態日期區塊（每次重算但 token 少）"""
-    return [_CACHED_SYS_BLOCK, {"type": "text", "text": build_date_block()}]
+def _build_system(user_id: str = "") -> list[dict]:
+    """完整對話用 system：
+    - 靜態 cache block（5 分鐘 ephemeral cache）
+    - 使用者長期記憶區塊（變動低；個人用情境量小，不額外 cache）
+    - 動態日期區塊（每次重算）
+    """
+    blocks: list[dict] = [_CACHED_SYS_BLOCK]
+    if user_id:
+        try:
+            facts = db.profile_list(user_id)
+        except Exception as e:
+            logger.warning(f"讀取 profile 失敗: {e}")
+            facts = []
+        profile_text = build_profile_block(facts)
+        if profile_text:
+            blocks.append({"type": "text", "text": profile_text})
+    blocks.append({"type": "text", "text": build_date_block()})
+    return blocks
 
 
 def _cache_history_tail(messages: list[dict]) -> list[dict]:
@@ -185,7 +200,7 @@ def ask_claude(user_id: str, text: str, image_b64: str | None = None) -> str:
     )
     db.save_message(user_id, "user", content)
     messages = _cache_history_tail(db.get_history(user_id))
-    system = _build_system()
+    system = _build_system(user_id=user_id)
 
     response = anthropic_client.messages.create(
         model=CLAUDE_MODEL, max_tokens=1000,

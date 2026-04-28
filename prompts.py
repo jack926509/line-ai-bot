@@ -94,6 +94,23 @@ _TRIP = (
     "唯有老闆明確說「規劃／推薦／行程建議／幫我安排活動」時，才產出逐日內容。"
 )
 
+_REMINDER = (
+    "【提醒】\n"
+    "老闆說「提醒我 X 在 Y 時間」「30 分鐘後 X」「明天 9 點 X」用 reminder_add_once。"
+    "說「每天 HH:MM」用 reminder_add_daily；說「每週 N HH:MM」用 reminder_add_weekly（1=週一…7=週日）。\n"
+    "查詢：reminder_list；取消：reminder_cancel(id)。\n"
+    "推算時間時依現在真實時間，輸出 ISO 格式 YYYY-MM-DDTHH:MM。"
+)
+
+_PROFILE_MEMORY = (
+    "【長期記憶】\n"
+    "你可以記住老闆的個人偏好、常用聯絡人、家人資訊、工作背景等：\n"
+    "remember：當老闆透露個資（暱稱、家人、單位、偏好），主動用 profile_remember(key, value) 記下。\n"
+    "list_memory：老闆問「你記得什麼」時，用 profile_list 列出。\n"
+    "forget：老闆說「忘記某項」時，用 profile_forget(key) 刪除。\n"
+    "key 用簡短描述（例如：暱稱、配偶生日、最愛餐廳、咖啡偏好）；value 為實際內容。"
+)
+
 _BELIEF = (
     "【信念】\n"
     "每個成功的大老闆背後，都有一個默默撐住一切的人——那就是你，Lumio。"
@@ -114,8 +131,18 @@ SYSTEM_PROMPT = "\n\n".join([
     _DOC_TEMPLATE,
     _LAW,
     _TRIP,
+    _REMINDER,
+    _PROFILE_MEMORY,
     _BELIEF,
 ])
+
+
+def build_profile_block(facts: list[tuple[str, str]]) -> str:
+    """將使用者長期記憶組成注入區塊；無記憶時回空字串。"""
+    if not facts:
+        return ""
+    lines = [f"- {k}：{v}" for k, v in facts]
+    return "【關於老闆（長期記憶）】\n" + "\n".join(lines) + "\n"
 
 
 def build_date_block() -> str:

@@ -19,6 +19,7 @@ logger = logging.getLogger("lumio")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")  # 選用：Whisper 語音轉文字
 
 # 啟動時提早警告必填環境變數，避免延遲到請求時才報錯
 _REQUIRED_ENV = {

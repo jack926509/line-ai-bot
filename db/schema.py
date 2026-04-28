@@ -113,6 +113,16 @@ def init_db():
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_proc_msg_created ON processed_messages(created_at)")
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_profile (
+                user_id    TEXT NOT NULL,
+                fact_key   TEXT NOT NULL,
+                fact_value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, fact_key)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_profile_user ON user_profile(user_id)")
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS token_usage (
                 user_id            TEXT NOT NULL,
                 usage_date         DATE NOT NULL,
