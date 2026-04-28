@@ -1,7 +1,11 @@
 """features.flex 純邏輯單元測試。"""
 from datetime import date
+from decimal import Decimal
 
-from features.flex import parse_postback, todo_carousel, note_carousel
+from features.flex import (
+    parse_postback, todo_carousel, note_carousel,
+    expense_carousel, expense_summary_bubble,
+)
 
 
 class TestParsePostback:
@@ -51,3 +55,51 @@ class TestNoteCarousel:
         fm = note_carousel(notes)
         assert fm is not None
         assert "1 則" in fm.alt_text
+
+
+class TestExpenseCarousel:
+    def test_empty_returns_none(self):
+        assert expense_carousel([], title="今日") is None
+
+    def test_basic_expense(self):
+        rows = [
+            (1, Decimal("120"), "餐飲", "午餐", "現金", date(2026, 4, 28)),
+            (2, Decimal("150"), "餐飲", "星巴克", "信用卡", date(2026, 4, 28)),
+        ]
+        fm = expense_carousel(rows, title="💰 今日")
+        assert fm is not None
+        assert "2 筆" in fm.alt_text
+        # 兩筆 NT$120 + NT$150 = NT$270
+        assert "270" in fm.alt_text
+
+    def test_income_amount_flagged(self):
+        # 負數金額 → 該 bubble 應視為收入（顯示 +NT$）
+        rows = [(1, Decimal("-50000"), "收入", "薪水", None, date(2026, 4, 28))]
+        fm = expense_carousel(rows, title="💰 收入")
+        assert fm is not None
+
+
+class TestExpenseSummaryBubble:
+    def test_renders_with_data(self):
+        summary = {
+            "total_expense": Decimal("1500"),
+            "total_income": Decimal("0"),
+            "net": Decimal("1500"),
+            "count": 5,
+            "by_category": [("餐飲", 800.0, 3), ("交通", 700.0, 2)],
+        }
+        fm = expense_summary_bubble(summary, "本月", date(2026, 4, 1), date(2026, 4, 28))
+        assert fm is not None
+        assert "本月" in fm.alt_text
+        assert "1,500" in fm.alt_text
+
+    def test_with_income(self):
+        summary = {
+            "total_expense": Decimal("500"),
+            "total_income": Decimal("50000"),
+            "net": Decimal("-49500"),
+            "count": 2,
+            "by_category": [("餐飲", 500.0, 1)],
+        }
+        fm = expense_summary_bubble(summary, "本月", date(2026, 4, 1), date(2026, 4, 28))
+        assert fm is not None

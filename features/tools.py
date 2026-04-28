@@ -19,6 +19,7 @@ from features.workflow import (
 import features.todo as todo_feat
 import features.note as note_feat
 import features.profile as profile_feat
+import features.expense as expense_feat
 
 
 # ── Tool 定義 ────────────────────────────────────
@@ -490,6 +491,69 @@ _REMINDER_CANCEL = {
     },
 }
 
+_EXPENSE_ADD = {
+    "name": "expense_add",
+    "description": (
+        "記一筆支出或收入。老闆說「午餐 120」「星巴克 150 刷卡」「薪水 50000」時主動使用。"
+        "金額：支出為正、收入為負（或 category='收入' 系統會自動轉負）。"
+        "category 從以下挑選：餐飲、交通、購物、娛樂、醫療、生活、家庭、教育、投資、收入、其他。"
+        "occurred_at 預設今天，僅在老闆指定其他日期（昨天/3/15）時填入 YYYY-MM-DD。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number", "description": "金額（NTD）"},
+            "category": {"type": "string", "description": "分類"},
+            "description": {"type": "string", "description": "簡短描述（午餐、星巴克、Uber 等）"},
+            "payment_method": {"type": "string", "description": "現金 / 信用卡 / Line Pay / 悠遊卡 / 街口 / ATM"},
+            "occurred_at": {"type": "string", "description": "發生日期 YYYY-MM-DD（預設今天）"},
+        },
+        "required": ["amount", "category"],
+    },
+}
+
+_EXPENSE_QUERY = {
+    "name": "expense_query",
+    "description": (
+        "查詢支出明細。皆未指定時看今天；可指定日期區間或分類。"
+        "適用於老闆問「我這週吃飯花了多少」「3 月份的交通費」。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "start_date": {"type": "string", "description": "開始日期 YYYY-MM-DD"},
+            "end_date": {"type": "string", "description": "結束日期 YYYY-MM-DD"},
+            "category": {"type": "string", "description": "限定分類"},
+        },
+    },
+}
+
+_EXPENSE_SUMMARY = {
+    "name": "expense_summary",
+    "description": (
+        "彙總統計：支出總額 + 分類占比。"
+        "period 可填：today / yesterday / week / month / last_month / year。"
+        "適用於老闆問「我這個月花了多少」「上個月支出」。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "period": {"type": "string", "description": "期間：today/yesterday/week/month/last_month/year"},
+        },
+        "required": ["period"],
+    },
+}
+
+_EXPENSE_DELETE = {
+    "name": "expense_delete",
+    "description": "刪除指定 id 的記帳。先用 expense_query 取得 id 再呼叫。",
+    "input_schema": {
+        "type": "object",
+        "properties": {"id": {"type": "integer", "description": "expense id"}},
+        "required": ["id"],
+    },
+}
+
 
 TOOLS = [
     _WEB_SEARCH, _SUMMARIZE_URL, _GOOGLE_MAP,
@@ -502,6 +566,7 @@ TOOLS = [
     _COMPOSE_WORKFLOW,
     _PROFILE_REMEMBER, _PROFILE_LIST, _PROFILE_FORGET,
     _REMINDER_ONCE, _REMINDER_DAILY, _REMINDER_WEEKLY, _REMINDER_LIST, _REMINDER_CANCEL,
+    _EXPENSE_ADD, _EXPENSE_QUERY, _EXPENSE_SUMMARY, _EXPENSE_DELETE,
 ]
 
 
@@ -608,6 +673,21 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
             return reminder_list(user_id)
         case "reminder_cancel":
             return reminder_cancel(user_id, d["id"])
+
+        # ── 記帳
+        case "expense_add":
+            return expense_feat.expense_add(
+                user_id, d["amount"], d["category"],
+                d.get("description"), d.get("payment_method"), d.get("occurred_at"),
+            )
+        case "expense_query":
+            return expense_feat.expense_query(
+                user_id, d.get("start_date"), d.get("end_date"), d.get("category"),
+            )
+        case "expense_summary":
+            return expense_feat.expense_summary(user_id, d["period"])
+        case "expense_delete":
+            return expense_feat.expense_delete(user_id, d["id"])
 
         case _:
             return "未知的工具"

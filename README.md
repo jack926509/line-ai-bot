@@ -1,7 +1,7 @@
 # 💕 Lumio — LINE AI 貼心秘書
 
 Lumio 是以 Anthropic Claude 為核心、串接 LINE Messaging API 的個人秘書機器人，部署於 Zeabur。
-聰明能幹、溫暖貼心，能管行程、寫公文、查法規、整理會議紀錄、規劃旅遊，並每天主動問早。
+聰明能幹、溫暖貼心，能管行程、寫公文、查法規、整理會議紀錄、規劃旅遊、**記帳、設提醒、聽語音**，並每天主動問早。
 
 ---
 
@@ -14,30 +14,47 @@ Lumio 是以 Anthropic Claude 為核心、串接 LINE Messaging API 的個人秘
 | 地圖連結 | 「信義區牛排」 | `google_map_search` |
 | Google Calendar | 「排明天3點開會」「把那會議改到5點」 | `gcal_query / gcal_add / gcal_update / gcal_delete / gcal_free_busy / gcal_upcoming` |
 | 待辦 / 備忘 | 「幫我記下要買牛奶」 | `todo_add / todo_list / todo_complete / todo_delete / note_add / note_list / note_delete` |
+| **記帳** | 「午餐 120」「咖啡 150 刷卡」「薪水 50000」 | `expense_add / expense_query / expense_summary / expense_delete` |
+| **提醒** | 「30 分鐘後提醒我出發」「每週五 17:00 交週報」 | `reminder_add_once / reminder_add_daily / reminder_add_weekly / reminder_list / reminder_cancel` |
+| **長期記憶** | 「記住我太太生日是 5/20」「我喜歡拿鐵不加糖」 | `profile_remember / profile_list / profile_forget` |
 | 公文初稿 | 「擬一份公文回環境部，主旨…」 | `gen_official_doc`（台灣公文體：受文者/主旨/說明/擬辦/陳/核） |
 | 公文範本庫 | 「存成範本」「套用範本 2」 | `template_add / template_list / template_apply / template_delete` |
 | 台灣法規 | 「空污法第 31 條」 | `law_search`（優先 law.moj.gov.tw） |
 | 會議紀錄 | 直接上傳 .docx / .pptx | 三段式整理：結論／待辦／簽呈摘要 |
 | 旅遊行程 | 「規劃 7/15-19 福岡」 | `trip_create / trip_list / trip_detail / trip_delete`（自動同步 GCal） |
 | 圖片分析 | 直接傳圖片 | Claude vision |
-| 文件摘要 | 上傳 .pdf / .txt / .md / .csv | `analyze_file` |
-| 早晨簡報 | 每日 08:00 自動推播 | `briefing.build_morning_briefing` |
+| 文件摘要 | 上傳 .pdf / .txt / .md / .csv | `analyze_file`（PDF 雙上限保護：60 頁／200k 字） |
+| **語音訊息** | 直接傳語音 | OpenAI Whisper → Claude（需 `OPENAI_API_KEY`） |
+| 早晨簡報 | 每日 08:00 自動推播（行程 + 待辦 + 昨日支出 + 天氣） | `briefing.build_morning_briefing` |
+
+> Claude 工具總數：**39**（自動工具呼叫上限 6 輪）
 
 ### 快捷指令
 
 | 指令 | 說明 |
 |------|------|
 | `/簡報` / `/簡報 開` / `/簡報 關` | 立即推播／開關每日推送 |
-| `/狀態` | 訂閱與資料統計 |
+| `/狀態` | 訂閱、待辦／備忘統計、本月支出、Token 用量 |
 | `/摘要 <URL>` | 即時摘要 |
 | `/範本` / `/範本 套用 N` / `/範本 刪 N` | 範本庫操作 |
 | `/法規 <關鍵字>` | 查台灣法規條文正文 |
 | `/旅遊` / `/旅遊 查看 N` / `/旅遊 刪 N` | 旅程列表／詳情／刪除（同步 GCal） |
-| `/待辦` / `/t` / `/待辦 完成 N` / `/待辦 刪 N` / `/待辦 清空` | 待辦操作 |
-| `/記事` / `/記事 <內容>` / `/記事 刪 N` | 備忘錄 |
+| `/待辦` / `/t` / `/待辦 完成 N` / `/待辦 刪 N` / `/待辦 清空` | 待辦操作（列表為 **Flex 卡片含完成/刪除按鈕**） |
+| `/記事` / `/記事 <內容>` / `/記事 刪 N` | 備忘錄（Flex 卡片含刪除按鈕） |
+| `/記帳` | 今日支出 Flex carousel（含刪除按鈕） |
+| `/記帳 月` / `週` / `上月` / `年` / `今日` / `昨日` | 期間統計 Flex（分類占比橫條圖） |
+| `/記帳 查 <分類>` / `/記帳 刪 N` | 篩選查詢／刪除 |
 | `/日曆` / `/cal` / `/日曆 明天\|本週\|即將\|4/30` | 行事曆查詢 |
-| `/reset` / `/清除記憶` | 清除對話記憶 |
+| `/reset` / `/清除記憶` | 清除對話記憶（不影響待辦/備忘/記帳/長期記憶） |
 | `/h` / `/help` | 顯示說明 |
+
+### 互動 UX 亮點
+
+- **Flex Message**：`/待辦`、`/記事`、`/記帳` 列表都是可點按的 carousel，按按鈕直接完成或刪除
+- **Webhook idempotency**：LINE 重送訊息自動去重，不重覆扣 token
+- **Reply / Push 自動切換**：reply token 逼近 25 秒自動 fallback push，避免 Claude 思考時間長造成回覆失敗
+- **Prompt caching**：System prompt 拆 CORE / TOOLS_GUIDE 雙層 cache，常駐情境省 ~90% input tokens
+- **多副本部署就緒**：APScheduler + PG advisory lock 確保簡報、提醒、清理任務只執行一次
 
 ---
 
@@ -49,9 +66,10 @@ Lumio 是以 Anthropic Claude 為核心、串接 LINE Messaging API 的個人秘
 |------|------|------|
 | LINE Messaging API Channel | Bot 入口 | ✅ |
 | Anthropic Console API Key | Claude 模型 | ✅ |
-| Zeabur PostgreSQL | 對話/待辦/訂閱/範本/旅程 | ✅ |
+| Zeabur PostgreSQL | 對話/待辦/訂閱/範本/旅程/記帳/提醒/長期記憶/Token 用量 | ✅ |
 | Perplexity API Key | 搜尋／摘要／法規 | 建議 |
 | Google Cloud Service Account | Calendar / 旅遊 GCal 同步 | 選用 |
+| OpenAI API Key | Whisper 語音轉文字 | 選用 |
 
 ### 2. 推上 GitHub 後在 Zeabur 部署
 
@@ -66,6 +84,7 @@ Zeabur 偵測 Python 自動部署。Procfile 已設定 `web: uvicorn main:app --
 | `ANTHROPIC_API_KEY` | ✅ | Claude API Key |
 | `DATABASE_URL` | ✅ | 設為 `${POSTGRES_URI}` 由 Zeabur 注入 |
 | `PERPLEXITY_API_KEY` | 建議 | 網路搜尋／URL 摘要／法規查詢 |
+| `OPENAI_API_KEY` | 選用 | 語音訊息 → Whisper 轉文字（未設定時語音訊息會回提示） |
 | `GOOGLE_CALENDAR_CREDENTIALS` | 選用 | Service Account JSON（單行字串） |
 | `GOOGLE_CALENDAR_ID` | 選用 | 預設 `primary` |
 | `WEATHER_CITY` | 選用 | wttr.in 城市，預設 `Taipei` |
@@ -79,6 +98,11 @@ Zeabur 偵測 Python 自動部署。Procfile 已設定 `web: uvicorn main:app --
 2. LINE Developers → Messaging API → Webhook URL 填 `https://<domain>/webhook` → Verify
 3. 加 Bot 為好友傳一則訊息：系統會自動 `upsert_subscription`，預設開啟早晨簡報
 
+### 5. 健康檢查
+
+- `GET /` — Liveness
+- `GET /healthz` — Readiness（檢查 DB 連線、Bot userId、scheduler 狀態，回 JSON `{"status": "ok"|"degraded", "checks": {...}}`）
+
 ---
 
 ## 🔧 技術架構
@@ -86,14 +110,15 @@ Zeabur 偵測 Python 自動部署。Procfile 已設定 `web: uvicorn main:app --
 | 元件 | 技術 |
 |------|------|
 | Web | FastAPI（Lifespan + BackgroundTasks） |
-| LINE | line-bot-sdk v3（Reply + Push） |
-| LLM | Anthropic Claude `claude-sonnet-4-6`（含 prompt cache） + `claude-haiku-4-5-20251001`（短任務） |
+| LINE | line-bot-sdk v3（Reply + Push + **Flex Message + Postback**） |
+| LLM | Anthropic Claude `claude-sonnet-4-6`（含雙層 prompt cache） + `claude-haiku-4-5-20251001`（短任務） |
 | 搜尋 | Perplexity sonar（統一封裝於 `features/perplexity.py`） |
+| 語音 | OpenAI Whisper（`whisper-1`） |
 | 地圖 | Google Maps URL（免 API Key） |
 | 行事曆 | Google Calendar API + Service Account |
-| 文件解析 | python-docx、python-pptx、pypdf |
+| 文件解析 | python-docx、python-pptx、pypdf（雙上限保護） |
 | 資料庫 | PostgreSQL（psycopg2 SimpleConnectionPool） |
-| 排程 | APScheduler（Asia/Taipei） |
+| 排程 | APScheduler（Asia/Taipei） + PG advisory lock |
 | 部署 | Zeabur |
 
 完整模組關係圖、資料流、擴充指南請見 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
@@ -104,37 +129,80 @@ Zeabur 偵測 Python 自動部署。Procfile 已設定 `web: uvicorn main:app --
 
 ```
 line-ai-bot/
-├── main.py              # FastAPI 入口、LINE webhook、slash dispatcher
+├── main.py              # FastAPI 入口、LINE webhook、slash dispatcher、postback handler
 ├── config.py            # 環境變數、共用 logger 與 LINE/Anthropic 客戶端
-├── prompts.py           # System prompt（命名常數組裝） + 動態日期區塊
+├── prompts.py           # System prompt（CORE + TOOLS_GUIDE 雙層）+ 動態日期區塊 + 長期記憶區塊
 ├── calendar_tw.py       # 台灣國定假日、農曆節慶
 ├── Procfile / requirements.txt
 ├── db/                  # 依關注點分檔的 db package
-│   ├── __init__.py      # re-export 公開 API（`import db; db.add_todo(...)` 仍可用）
-│   ├── pool.py          # 連線池 + transaction context manager
-│   ├── schema.py        # 建表 / 索引 / 補欄位
-│   ├── conversations.py # 對話記憶（保留 12 則）
+│   ├── __init__.py            # re-export 公開 API（`import db; db.add_todo(...)` 仍可用）
+│   ├── pool.py                # 連線池 + transaction context manager
+│   ├── schema.py              # 建表 / 索引 / 補欄位
+│   ├── conversations.py       # 對話記憶（保留 12 則）
 │   ├── todos.py / notes.py
 │   ├── subscriptions.py / push_log.py
-│   ├── templates.py     # 公文範本
-│   └── trips.py         # 旅遊（含 places / gcal_ids JSONB）
-└── features/
-    ├── chat.py          # Claude 主迴圈、tool use、prompt cache、檔案摘要
-    ├── tools.py         # 27 個工具定義 + match/case dispatch
-    ├── perplexity.py    # Perplexity 統一介面
-    ├── search.py        # web_search / google_map_search
-    ├── url_summary.py   # 網址摘要
-    ├── calendar.py      # Google Calendar CRUD（含時區補正）
-    ├── briefing.py      # 早晨簡報
-    ├── doc_official.py  # 公文初稿 + 範本庫
-    ├── law.py           # 法規查詢
-    ├── meeting.py       # .docx / .pptx 三段式整理
-    ├── trip.py          # 旅遊容器（同步 GCal）
-    ├── todo.py / note.py / help.py
-    ├── push.py          # LINE Push API
-    ├── scheduler.py     # APScheduler 啟停 + 早晨簡報 cron
-    └── workflow.py      # 多步驟工作流（placeholder）
+│   ├── templates.py           # 公文範本
+│   ├── trips.py               # 旅遊（含 places / gcal_ids JSONB）
+│   ├── processed_messages.py  # Webhook idempotency（messageId 去重）
+│   ├── token_usage.py         # 每日 Claude API 用量彙總
+│   ├── user_profile.py        # 長期記憶（KV）
+│   ├── workflows.py           # 提醒（一次性 / 每日 / 每週）
+│   └── expenses.py            # 記帳
+├── features/
+│   ├── chat.py          # Claude 主迴圈、tool use（最多 6 輪）、雙層 prompt cache、檔案摘要
+│   ├── tools.py         # 39 個工具定義 + match/case dispatch
+│   ├── perplexity.py    # Perplexity 統一介面
+│   ├── search.py        # web_search / google_map_search
+│   ├── url_summary.py   # 網址摘要
+│   ├── calendar.py      # Google Calendar CRUD（含時區補正）
+│   ├── briefing.py      # 早晨簡報（行程 + 待辦 + 昨日支出 + 天氣）
+│   ├── doc_official.py  # 公文初稿 + 範本庫
+│   ├── law.py           # 法規查詢
+│   ├── meeting.py       # .docx / .pptx 三段式整理
+│   ├── trip.py          # 旅遊容器（同步 GCal）
+│   ├── todo.py / note.py / help.py
+│   ├── push.py          # LINE Push API
+│   ├── scheduler.py     # APScheduler：簡報 / 提醒 tick / 清理（含 advisory lock）
+│   ├── workflow.py      # 提醒（reminder_add_once/daily/weekly + tick）
+│   ├── profile.py       # 長期記憶入口
+│   ├── expense.py       # 記帳業務邏輯（11 分類、6 付款方式）
+│   ├── flex.py          # Flex Message 卡片 + postback 協定（todo/note/expense）
+│   └── audio.py         # OpenAI Whisper 整合
+└── tests/               # pytest 單元測試（72 個，純函式覆蓋）
 ```
+
+---
+
+## 🗄️ 資料庫表
+
+| 表 | 用途 |
+|----|------|
+| `conversations` | 對話記憶（user_id × role × content，保留 12 則） |
+| `todos` | 待辦事項（含分類、到期日） |
+| `notes` | 備忘錄 |
+| `subscriptions` | 早晨簡報訂閱 |
+| `push_log` | 推播去重（user × kind × ref_date 唯一） |
+| `doc_templates` | 公文範本庫 |
+| `trips` | 旅遊容器（places / gcal_ids JSONB） |
+| `processed_messages` | Webhook 訊息去重（messageId PK，7 天保留） |
+| `token_usage` | Claude API 用量彙總（user × date × model） |
+| `user_profile` | 長期記憶 KV（每用戶 50 條上限） |
+| `workflows` | 提醒（kind/spec/next_run_at） |
+| `expenses` | 記帳明細（amount, category, description, payment_method, occurred_at） |
+
+啟動時 `init_db()` 會自動 `CREATE TABLE IF NOT EXISTS` 並補索引。
+
+---
+
+## 🧪 測試
+
+```bash
+pip install -r requirements.txt
+pip install pytest
+python -m pytest tests/ -v
+```
+
+72 個純函式測試，涵蓋：時間計算、Markdown 清理、postback 解析、Flex 卡片組裝、prompt 拆分、todo/expense 解析、金額格式化等。
 
 ---
 
@@ -148,6 +216,12 @@ line-ai-bot/
 
 **簡報沒推送** — 檢查 `DISABLE_SCHEDULER` 是否設成 1、`subscriptions.briefing` 是否為 TRUE、`push_log` 當日是否已記錄。
 
-**修改個性** — 編輯 `prompts.py` 對應命名常數（`_PERSONA` / `_IDENTITY` 等），不必動 `SYSTEM_PROMPT` 主體。
+**語音訊息回「尚未設定」** — 設定 `OPENAI_API_KEY` 即可啟用 Whisper 轉文字。
 
-**對話記憶長度** — `db/conversations.py` 的 `MAX_HISTORY`（預設 12）。
+**提醒沒響** — 提醒由排程器每分鐘 tick，檢查 scheduler 是否啟動（`/healthz` 看 `checks.scheduler`）；DISABLE_SCHEDULER=1 會關閉。
+
+**修改個性** — 編輯 `prompts.py` 對應命名常數（`_PERSONA` / `_IDENTITY` 等），不必動 `SYSTEM_PROMPT_CORE` 主體。
+
+**對話記憶長度** — `db/conversations.py` 的 `MAX_HISTORY`（預設 12）；長期記憶由 `db/user_profile.py` 跨對話保留。
+
+**Token 成本** — `/狀態` 顯示今日／本月呼叫次數與成本；明細存於 `token_usage` 表，預設保留 365 天。

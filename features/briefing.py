@@ -1,6 +1,6 @@
-"""早晨簡報組合（問候 + 行程 + 待辦 + 天氣 + 節日）"""
+"""早晨簡報組合（問候 + 行程 + 待辦 + 天氣 + 節日 + 支出）"""
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import requests
 from zoneinfo import ZoneInfo
@@ -46,6 +46,36 @@ def _today_todos_block(user_id: str) -> str:
     return "\n".join(lines)
 
 
+def _expense_block(user_id: str) -> str:
+    """昨日支出 + 本月累計（簡短版，置於早報尾段）。"""
+    try:
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        month_start = today.replace(day=1)
+        y = db.expense_summarize(user_id, yesterday, yesterday)
+        m = db.expense_summarize(user_id, month_start, today)
+    except Exception as e:
+        logger.warning(f"支出區塊失敗: {e}")
+        return ""
+
+    if y["count"] == 0 and m["count"] == 0:
+        return ""
+
+    lines = []
+    if y["count"] > 0:
+        lines.append(f"💰 昨日支出 NT${float(y['total_expense']):,.0f}（{y['count']} 筆）")
+    if m["count"] > 0:
+        # 取前 3 大分類
+        top = m["by_category"][:3]
+        if top:
+            cat_str = "  ".join(
+                f"{cat} NT${amt:,.0f}" for cat, amt, _ in top
+            )
+            lines.append(f"📊 本月累計 NT${float(m['total_expense']):,.0f}")
+            lines.append(f"   {cat_str}")
+    return "\n".join(lines)
+
+
 def _weather_block() -> str:
     try:
         resp = requests.get(
@@ -73,6 +103,11 @@ def build_morning_briefing(user_id: str) -> str:
 
     parts.append("")
     parts.append(_today_todos_block(user_id))
+
+    expense = _expense_block(user_id)
+    if expense:
+        parts.append("")
+        parts.append(expense)
 
     weather = _weather_block()
     if weather:

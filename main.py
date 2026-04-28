@@ -31,8 +31,14 @@ from features.law import law_search
 from features.trip import handle_trip
 from features.meeting import analyze_meeting_file
 from features.push import push_text
-from features.flex import todo_carousel, note_carousel, parse_postback
+from features.flex import (
+    todo_carousel, note_carousel, expense_carousel, expense_summary_bubble,
+    parse_postback,
+)
 from features.audio import transcribe
+from features.expense import (
+    handle_expense, expense_delete, label_period, _today,
+)
 
 
 # ── Reply token / Rate limit ─────────────────────
@@ -197,6 +203,62 @@ def _note_response(t: str, user_id: str):
     return handle_note(t, user_id)
 
 
+def _expense_response(t: str, user_id: str):
+    """`/記帳` 純列表 → 今日 Flex carousel；`/記帳 月/週/上月/年` → 統計 Flex；其餘走文字。"""
+    parts = t.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    if not arg:
+        # 預設今日列表
+        today = _today()
+        rows = db.list_expenses(user_id, today, today, limit=20)
+        flex = expense_carousel(rows, title=f"💰 今日（{today}）")
+        if flex is not None:
+            return flex
+        return f"📭 今日（{today}）尚無記錄\n直接說「午餐 120」即可記帳"
+
+    period_map = {
+        "月": "month", "本月": "month", "上月": "last_month",
+        "週": "week", "本週": "week", "年": "year", "今年": "year",
+        "今日": "today", "昨日": "yesterday",
+    }
+    if arg in period_map:
+        period = period_map[arg]
+        sd, ed = _period_range(period)
+        summary = db.expense_summarize(user_id, sd, ed)
+        if summary["count"] > 0:
+            return expense_summary_bubble(summary, label_period(period), sd, ed)
+        # 空也走文字回覆友善訊息
+        return f"📭 {label_period(period)}（{sd}~{ed}）尚無記錄"
+
+    # 其他子指令（查 / 刪 / 清單 / 說明）走文字
+    return handle_expense(t, user_id)
+
+
+def _period_range(period: str):
+    """同 features.expense.expense_summary 的期間切片，但回 (sd, ed) 給 Flex 統計用。"""
+    today = _today()
+    if period == "today":
+        return today, today
+    if period == "yesterday":
+        from datetime import timedelta
+        d = today - timedelta(days=1)
+        return d, d
+    if period == "week":
+        from datetime import timedelta
+        return today - timedelta(days=today.weekday()), today
+    if period == "month":
+        return today.replace(day=1), today
+    if period == "last_month":
+        from datetime import timedelta
+        first = today.replace(day=1)
+        ed = first - timedelta(days=1)
+        return ed.replace(day=1), ed
+    if period == "year":
+        return today.replace(month=1, day=1), today
+    return today, today
+
+
 def _build_status(user_id: str) -> str:
     sub = db.get_subscription(user_id)
     todos = db.get_todos(user_id)
@@ -209,18 +271,30 @@ def _build_status(user_id: str) -> str:
     try:
         usage = db.get_usage_summary(user_id)
         usage_line = (
-            f"💰 Token 用量：今日 {usage['today_calls']} 次 ≈ ${usage['today_cost']:.4f}\n"
+            f"🤖 Token 用量：今日 {usage['today_calls']} 次 ≈ ${usage['today_cost']:.4f}\n"
             f"　　　　　　 本月 {usage['month_calls']} 次 ≈ ${usage['month_cost']:.4f}"
         )
     except Exception as e:
         logger.warning(f"取得 token 用量失敗: {e}")
-        usage_line = "💰 Token 用量：（暫無資料）"
+        usage_line = "🤖 Token 用量：（暫無資料）"
+    try:
+        today = _today()
+        month_start = today.replace(day=1)
+        es = db.expense_summarize(user_id, month_start, today)
+        if es["count"] > 0:
+            expense_line = f"💰 本月支出：NT${float(es['total_expense']):,.0f}（{es['count']} 筆）"
+        else:
+            expense_line = "💰 本月支出：尚無記錄"
+    except Exception as e:
+        logger.warning(f"取得月度支出失敗: {e}")
+        expense_line = "💰 本月支出：（暫無資料）"
     return (
         "📊 Lumio 狀態\n"
         "━━━━━━━━━━━\n"
         f"{sub_line}\n"
         f"📝 待辦：{sum(1 for t in todos if not t[2])} 項未完成 / 共 {len(todos)}\n"
         f"📒 備忘：{len(notes)} 則\n"
+        f"{expense_line}\n"
         f"{usage_line}"
     )
 
@@ -271,6 +345,8 @@ def on_text(event: MessageEvent):
         _send(event.reply_token, user_id, _todo_response(t, user_id), started_at)
     elif t.startswith("/記事") or t.startswith("/備忘"):
         _send(event.reply_token, user_id, _note_response(t, user_id), started_at)
+    elif t.startswith("/記帳"):
+        _send(event.reply_token, user_id, _expense_response(t, user_id), started_at)
     elif t.startswith("/日曆") or t.startswith("/cal"):
         _send(event.reply_token, user_id, handle_cal(t), started_at)
     elif t in ("/h", "/help"):
@@ -296,6 +372,10 @@ def on_postback(event: PostbackEvent):
         idx = int(data.get("i", "0"))
     except ValueError:
         idx = 0
+    try:
+        eid = int(data.get("id", "0"))
+    except ValueError:
+        eid = 0
 
     if act == "todo.done" and idx > 0:
         text_msg = todo_complete(user_id, idx)
@@ -308,6 +388,14 @@ def on_postback(event: PostbackEvent):
     elif act == "note.del" and idx > 0:
         text_msg = note_delete(user_id, idx)
         flex = note_carousel(db.get_notes(user_id))
+        _send(event.reply_token, user_id, flex if flex else text_msg, started_at)
+    elif act == "expense.del" and eid > 0:
+        text_msg = expense_delete(user_id, eid)
+        today = _today()
+        flex = expense_carousel(
+            db.list_expenses(user_id, today, today, limit=20),
+            title=f"💰 今日（{today}）",
+        )
         _send(event.reply_token, user_id, flex if flex else text_msg, started_at)
     else:
         logger.warning(f"未知 postback act={act} data={event.postback.data!r}")

@@ -25,6 +25,10 @@ from db.workflows import (
     update_next_run as workflow_update_next_run,
     cleanup_workflows,
 )
+from db.expenses import (
+    add_expense, list_expenses, get_expense, delete_expense,
+    summarize as expense_summarize,
+)
 
 __all__ = [
     "get_db", "DATABASE_URL", "init_db",
@@ -41,4 +45,6 @@ __all__ = [
     "add_workflow", "list_workflows", "cancel_workflow",
     "workflows_fetch_due", "workflow_mark_done", "workflow_update_next_run",
     "cleanup_workflows",
+    "add_expense", "list_expenses", "get_expense", "delete_expense",
+    "expense_summarize",
 ]
