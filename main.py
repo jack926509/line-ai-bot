@@ -5,8 +5,11 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
-from linebot.v3.messaging import ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent
+from linebot.v3.messaging import ReplyMessageRequest, TextMessage, FlexMessage
+from linebot.v3.webhooks import (
+    MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent,
+    AudioMessageContent, PostbackEvent,
+)
 from linebot.v3.exceptions import InvalidSignatureError
 
 import db
@@ -16,8 +19,8 @@ from config import (
     webhook_handler as handler,
 )
 from features.chat import ask_claude, analyze_file
-from features.todo import handle_todo
-from features.note import handle_note
+from features.todo import handle_todo, todo_complete, todo_delete
+from features.note import handle_note, note_delete
 from features.help import handle_reset_memory, handle_help
 from features.calendar import handle_cal
 from features.briefing import build_morning_briefing
@@ -28,6 +31,8 @@ from features.law import law_search
 from features.trip import handle_trip
 from features.meeting import analyze_meeting_file
 from features.push import push_text
+from features.flex import todo_carousel, note_carousel, parse_postback
+from features.audio import transcribe
 
 
 # ── Reply token / Rate limit ─────────────────────
@@ -50,6 +55,19 @@ def _rate_limited(user_id: str) -> bool:
         return True
     q.append(now)
     return False
+
+
+def _is_duplicate(message_id: str) -> bool:
+    """LINE webhook 重送去重：mark_processed 利用 PRIMARY KEY 原子寫入，
+    回傳 False 代表已存在 → 略過。"""
+    if not message_id:
+        return False
+    try:
+        return not db.mark_processed(message_id)
+    except Exception as e:
+        # DB 故障時不阻擋訊息（fail-open），僅記錄
+        logger.warning(f"idempotency check 失敗（fail-open）: {e}")
+        return False
 
 
 # ── FastAPI Lifespan ──────────────────────────────
@@ -81,6 +99,36 @@ async def root():
     return {"status": "LINE AI Bot is running! ✅"}
 
 
+@app.get("/healthz")
+async def healthz():
+    """輕量健康檢查：DB 連線可達 + Bot userId 已取得 + scheduler 狀態。
+
+    回傳 200 + JSON。任何子項失敗時對應欄位為 false 但仍回 200，
+    讓上游監控自行判讀（相較硬性 500 更利於故障排除）。
+    """
+    checks: dict = {}
+    # DB
+    try:
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        checks["db"] = True
+    except Exception as e:
+        logger.warning(f"healthz DB 檢查失敗: {e}")
+        checks["db"] = False
+    # Bot userId（lifespan 啟動時設定）
+    checks["bot_user_id"] = bool(config.BOT_USER_ID)
+    # Scheduler
+    try:
+        from features.scheduler import _scheduler
+        checks["scheduler"] = bool(_scheduler and _scheduler.running)
+    except Exception:
+        checks["scheduler"] = False
+    overall = "ok" if all(checks.values()) else "degraded"
+    return {"status": overall, "checks": checks}
+
+
 def _handle_webhook_safe(body: str, signature: str) -> None:
     """背景任務包裝：捕捉所有例外避免靜默失敗"""
     try:
@@ -104,20 +152,49 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 # ── LINE 事件處理 ─────────────────────────────────
 
 
-def _send(reply_token: str, user_id: str, msg: str, started_at: float | None = None) -> None:
-    """先嘗試 reply；若 token 已逼近 TTL 或回覆失敗，自動 fallback 到 Push API。"""
+def _send(reply_token: str, user_id: str, msg, started_at: float | None = None) -> None:
+    """先嘗試 reply；若 token 已逼近 TTL 或回覆失敗，自動 fallback 到 Push API。
+
+    msg 可為 str（文字訊息）或 FlexMessage（互動式卡片）。
+    Flex 因 push 走另一條路徑（push_text 僅支援文字），fallback 時改回送 alt_text。
+    """
+    is_flex = isinstance(msg, FlexMessage)
+    fallback_text = msg.alt_text if is_flex else msg
+
     if started_at is not None and time.monotonic() - started_at > _REPLY_TTL_SECONDS:
         logger.info(f"reply_token 逼近 TTL，改用 push user={user_id}")
-        push_text(user_id, msg)
+        push_text(user_id, fallback_text)
         return
     try:
         line_bot_api.reply_message(
-            ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=msg)])
+            ReplyMessageRequest(reply_token=reply_token, messages=[msg if is_flex else TextMessage(text=msg)])
         )
     except Exception as e:
         logger.warning(f"LINE reply 失敗，改用 push: {e}")
         if user_id:
-            push_text(user_id, msg)
+            push_text(user_id, fallback_text)
+
+
+def _todo_response(t: str, user_id: str):
+    """`/待辦` 純列表時回 Flex carousel；其餘子指令（新增/完成/刪除）走文字。"""
+    parts = t.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if not arg:
+        flex = todo_carousel(db.get_todos(user_id))
+        if flex is not None:
+            return flex
+        # 空清單走文字（含說明）
+    return handle_todo(t, user_id)
+
+
+def _note_response(t: str, user_id: str):
+    parts = t.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if not arg:
+        flex = note_carousel(db.get_notes(user_id))
+        if flex is not None:
+            return flex
+    return handle_note(t, user_id)
 
 
 def _build_status(user_id: str) -> str:
@@ -129,17 +206,30 @@ def _build_status(user_id: str) -> str:
     else:
         on = "開啟" if sub["briefing"] else "關閉"
         sub_line = f"☀️ 早晨簡報：{on}（每日 {sub['brief_time']}）"
+    try:
+        usage = db.get_usage_summary(user_id)
+        usage_line = (
+            f"💰 Token 用量：今日 {usage['today_calls']} 次 ≈ ${usage['today_cost']:.4f}\n"
+            f"　　　　　　 本月 {usage['month_calls']} 次 ≈ ${usage['month_cost']:.4f}"
+        )
+    except Exception as e:
+        logger.warning(f"取得 token 用量失敗: {e}")
+        usage_line = "💰 Token 用量：（暫無資料）"
     return (
         "📊 Lumio 狀態\n"
         "━━━━━━━━━━━\n"
         f"{sub_line}\n"
         f"📝 待辦：{sum(1 for t in todos if not t[2])} 項未完成 / 共 {len(todos)}\n"
-        f"📒 備忘：{len(notes)} 則"
+        f"📒 備忘：{len(notes)} 則\n"
+        f"{usage_line}"
     )
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_text(event: MessageEvent):
+    if _is_duplicate(event.message.id):
+        logger.info(f"略過重送訊息 mid={event.message.id}")
+        return
     started_at = time.monotonic()
     text = event.message.text
     user_id = event.source.user_id
@@ -178,9 +268,9 @@ def on_text(event: MessageEvent):
     elif t.startswith("/旅遊"):
         _send(event.reply_token, user_id, handle_trip(t, user_id), started_at)
     elif t.startswith("/待辦") or t.startswith("/t"):
-        _send(event.reply_token, user_id, handle_todo(t, user_id), started_at)
+        _send(event.reply_token, user_id, _todo_response(t, user_id), started_at)
     elif t.startswith("/記事") or t.startswith("/備忘"):
-        _send(event.reply_token, user_id, handle_note(t, user_id), started_at)
+        _send(event.reply_token, user_id, _note_response(t, user_id), started_at)
     elif t.startswith("/日曆") or t.startswith("/cal"):
         _send(event.reply_token, user_id, handle_cal(t), started_at)
     elif t in ("/h", "/help"):
@@ -193,8 +283,42 @@ def on_text(event: MessageEvent):
             _send(event.reply_token, user_id, f"⚠️ 發生錯誤：{e}", started_at)
 
 
+@handler.add(PostbackEvent)
+def on_postback(event: PostbackEvent):
+    """處理 Flex Message 按鈕點擊（待辦/記事互動操作）。"""
+    started_at = time.monotonic()
+    user_id = event.source.user_id
+    db.upsert_subscription(user_id)
+
+    data = parse_postback(event.postback.data or "")
+    act = data.get("act", "")
+    try:
+        idx = int(data.get("i", "0"))
+    except ValueError:
+        idx = 0
+
+    if act == "todo.done" and idx > 0:
+        text_msg = todo_complete(user_id, idx)
+        flex = todo_carousel(db.get_todos(user_id))
+        _send(event.reply_token, user_id, flex if flex else text_msg, started_at)
+    elif act == "todo.del" and idx > 0:
+        text_msg = todo_delete(user_id, idx)
+        flex = todo_carousel(db.get_todos(user_id))
+        _send(event.reply_token, user_id, flex if flex else text_msg, started_at)
+    elif act == "note.del" and idx > 0:
+        text_msg = note_delete(user_id, idx)
+        flex = note_carousel(db.get_notes(user_id))
+        _send(event.reply_token, user_id, flex if flex else text_msg, started_at)
+    else:
+        logger.warning(f"未知 postback act={act} data={event.postback.data!r}")
+        _send(event.reply_token, user_id, "⚠️ 操作未識別，請重試", started_at)
+
+
 @handler.add(MessageEvent, message=ImageMessageContent)
 def on_image(event: MessageEvent):
+    if _is_duplicate(event.message.id):
+        logger.info(f"略過重送圖片 mid={event.message.id}")
+        return
     started_at = time.monotonic()
     user_id = event.source.user_id
     db.upsert_subscription(user_id)
@@ -211,8 +335,44 @@ def on_image(event: MessageEvent):
         _send(event.reply_token, user_id, f"⚠️ 圖片分析失敗：{e}", started_at)
 
 
+@handler.add(MessageEvent, message=AudioMessageContent)
+def on_audio(event: MessageEvent):
+    """語音訊息：Whisper 轉文字 → 餵給 Claude 主迴圈，回覆同對話路徑。"""
+    if _is_duplicate(event.message.id):
+        logger.info(f"略過重送語音 mid={event.message.id}")
+        return
+    started_at = time.monotonic()
+    user_id = event.source.user_id
+    db.upsert_subscription(user_id)
+    if _rate_limited(user_id):
+        _send(event.reply_token, user_id,
+              "⚠️ 訊息頻率過高，請稍候片刻再試", started_at)
+        return
+    try:
+        raw = bytes(line_bot_blob.get_message_content(event.message.id))
+        text = transcribe(raw)
+        if text is None:
+            _send(event.reply_token, user_id,
+                  "⚠️ 尚未設定語音轉文字（需設定 OPENAI_API_KEY 環境變數）", started_at)
+            return
+        if not text.strip():
+            _send(event.reply_token, user_id,
+                  "⚠️ 語音內容為空或無法辨識，請再試一次", started_at)
+            return
+        logger.info(f"Whisper 轉錄 user={user_id} chars={len(text)}")
+        # 將辨識結果送入 Claude，回覆前綴提示「你說：」讓老闆確認辨識正確
+        reply = ask_claude(user_id, text)
+        _send(event.reply_token, user_id, f"🎤 你說：「{text}」\n\n{reply}", started_at)
+    except Exception as e:
+        logger.exception(f"語音處理錯誤: {e}")
+        _send(event.reply_token, user_id, f"⚠️ 語音處理失敗：{e}", started_at)
+
+
 @handler.add(MessageEvent, message=FileMessageContent)
 def on_file(event: MessageEvent):
+    if _is_duplicate(event.message.id):
+        logger.info(f"略過重送檔案 mid={event.message.id}")
+        return
     started_at = time.monotonic()
     user_id = event.source.user_id
     db.upsert_subscription(user_id)

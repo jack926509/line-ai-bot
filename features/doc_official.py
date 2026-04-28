@@ -32,6 +32,7 @@ def gen_official_doc(
     points: list[str] | None = None,
     basis: str | None = None,
     plan: str | None = None,
+    user_id: str = "",
 ) -> str:
     """生成公文初稿。recipient 為受文者；subject 為主旨；
     points 為說明事項；basis 為依據；plan 為擬辦方向。"""
@@ -55,7 +56,7 @@ def gen_official_doc(
 
     try:
         from features.chat import simple_complete
-        text = simple_complete(prompt, max_tokens=2000, with_system=False).strip()
+        text = simple_complete(prompt, max_tokens=2000, with_system=False, user_id=user_id).strip()
         return f"📋 公文初稿：\n\n{text}\n\n（請自行調整文號、附件與發文日期）"
     except Exception as e:
         logger.warning(f"公文生成失敗: {e}")

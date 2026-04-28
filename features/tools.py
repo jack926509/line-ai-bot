@@ -11,9 +11,14 @@ from features.doc_official import (
 )
 from features.law import law_search
 from features.trip import trip_create, trip_list, trip_detail, trip_delete
-from features.workflow import compose_workflow
+from features.workflow import (
+    compose_workflow,
+    reminder_add_once, reminder_add_daily, reminder_add_weekly,
+    reminder_list, reminder_cancel,
+)
 import features.todo as todo_feat
 import features.note as note_feat
+import features.profile as profile_feat
 
 
 # ── Tool 定義 ────────────────────────────────────
@@ -394,6 +399,97 @@ _COMPOSE_WORKFLOW = {
     },
 }
 
+_PROFILE_REMEMBER = {
+    "name": "profile_remember",
+    "description": (
+        "記住老闆的個人偏好或事實到長期記憶。當老闆透露暱稱、家人、單位、"
+        "最愛餐廳、咖啡偏好等可長期沿用的資訊時主動使用。同 key 會覆寫。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "key": {"type": "string", "description": "簡短欄位名（例：暱稱、配偶生日、咖啡偏好）"},
+            "value": {"type": "string", "description": "對應內容"},
+        },
+        "required": ["key", "value"],
+    },
+}
+
+_PROFILE_LIST = {
+    "name": "profile_list",
+    "description": "列出已記住的所有長期記憶，供老闆檢視。",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_PROFILE_FORGET = {
+    "name": "profile_forget",
+    "description": "刪除指定 key 的長期記憶。老闆說「忘記某項」時使用。",
+    "input_schema": {
+        "type": "object",
+        "properties": {"key": {"type": "string", "description": "要刪除的 key"}},
+        "required": ["key"],
+    },
+}
+
+_REMINDER_ONCE = {
+    "name": "reminder_add_once",
+    "description": (
+        "排定一次性提醒。老闆說「提醒我 X 在 Y 時間」「30 分鐘後 X」「明天早上 9 點 X」時使用。"
+        "請先依當前時間換算為 ISO 格式 (YYYY-MM-DDTHH:MM)。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "提醒內容"},
+            "when_iso": {"type": "string", "description": "提醒時間 ISO（例：2026-04-29T09:00）"},
+        },
+        "required": ["text", "when_iso"],
+    },
+}
+
+_REMINDER_DAILY = {
+    "name": "reminder_add_daily",
+    "description": "每天固定時間提醒。例：「每天早上 7 點提醒我喝水」。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "提醒內容"},
+            "hhmm": {"type": "string", "description": "時間 HH:MM（24 小時制）"},
+        },
+        "required": ["text", "hhmm"],
+    },
+}
+
+_REMINDER_WEEKLY = {
+    "name": "reminder_add_weekly",
+    "description": "每週固定時間提醒。例：「每週五下午 5 點交週報」。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "提醒內容"},
+            "weekday": {"type": "integer", "description": "1=週一, 2=週二, ..., 7=週日"},
+            "hhmm": {"type": "string", "description": "時間 HH:MM"},
+        },
+        "required": ["text", "weekday", "hhmm"],
+    },
+}
+
+_REMINDER_LIST = {
+    "name": "reminder_list",
+    "description": "列出所有待執行的提醒（含一次性、每日、每週）。",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_REMINDER_CANCEL = {
+    "name": "reminder_cancel",
+    "description": "取消提醒（用 reminder_list 查到的 id）。",
+    "input_schema": {
+        "type": "object",
+        "properties": {"id": {"type": "integer", "description": "提醒 id"}},
+        "required": ["id"],
+    },
+}
+
 
 TOOLS = [
     _WEB_SEARCH, _SUMMARIZE_URL, _GOOGLE_MAP,
@@ -404,6 +500,8 @@ TOOLS = [
     _LAW_SEARCH,
     _TRIP_CREATE, _TRIP_LIST, _TRIP_DETAIL, _TRIP_DELETE,
     _COMPOSE_WORKFLOW,
+    _PROFILE_REMEMBER, _PROFILE_LIST, _PROFILE_FORGET,
+    _REMINDER_ONCE, _REMINDER_DAILY, _REMINDER_WEEKLY, _REMINDER_LIST, _REMINDER_CANCEL,
 ]
 
 
@@ -462,6 +560,7 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
             return gen_official_doc(
                 d["recipient"], d["subject"],
                 d.get("points"), d.get("basis"), d.get("plan"),
+                user_id=user_id,
             )
         case "template_list":
             return template_list(user_id)
@@ -489,6 +588,26 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
         # ── 工作流（預留）
         case "compose_workflow":
             return compose_workflow(d["goal"])
+
+        # ── 長期記憶
+        case "profile_remember":
+            return profile_feat.remember(user_id, d["key"], d["value"])
+        case "profile_list":
+            return profile_feat.list_memory(user_id)
+        case "profile_forget":
+            return profile_feat.forget(user_id, d["key"])
+
+        # ── 提醒
+        case "reminder_add_once":
+            return reminder_add_once(user_id, d["text"], d["when_iso"])
+        case "reminder_add_daily":
+            return reminder_add_daily(user_id, d["text"], d["hhmm"])
+        case "reminder_add_weekly":
+            return reminder_add_weekly(user_id, d["text"], d["weekday"], d["hhmm"])
+        case "reminder_list":
+            return reminder_list(user_id)
+        case "reminder_cancel":
+            return reminder_cancel(user_id, d["id"])
 
         case _:
             return "未知的工具"
