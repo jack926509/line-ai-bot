@@ -99,6 +99,36 @@ async def root():
     return {"status": "LINE AI Bot is running! ✅"}
 
 
+@app.get("/healthz")
+async def healthz():
+    """輕量健康檢查：DB 連線可達 + Bot userId 已取得 + scheduler 狀態。
+
+    回傳 200 + JSON。任何子項失敗時對應欄位為 false 但仍回 200，
+    讓上游監控自行判讀（相較硬性 500 更利於故障排除）。
+    """
+    checks: dict = {}
+    # DB
+    try:
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        checks["db"] = True
+    except Exception as e:
+        logger.warning(f"healthz DB 檢查失敗: {e}")
+        checks["db"] = False
+    # Bot userId（lifespan 啟動時設定）
+    checks["bot_user_id"] = bool(config.BOT_USER_ID)
+    # Scheduler
+    try:
+        from features.scheduler import _scheduler
+        checks["scheduler"] = bool(_scheduler and _scheduler.running)
+    except Exception:
+        checks["scheduler"] = False
+    overall = "ok" if all(checks.values()) else "degraded"
+    return {"status": overall, "checks": checks}
+
+
 def _handle_webhook_safe(body: str, signature: str) -> None:
     """背景任務包裝：捕捉所有例外避免靜默失敗"""
     try:

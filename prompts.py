@@ -117,12 +117,21 @@ _BELIEF = (
 )
 
 
-SYSTEM_PROMPT = "\n\n".join([
+# ── 兩段式 Prompt：CORE（極少改動，獨立 cache）+ TOOLS_GUIDE（工具指引，可變）──
+#
+# Anthropic prompt cache 命中需「字串完全一致」。把工具相關的指引分離後：
+# - 改 _CALENDAR / _TODO_NOTE / _REMINDER 等不會踢掉 CORE 的人格 cache
+# - CORE 命中率隨修改頻率拉高，省 token 成本
+SYSTEM_PROMPT_CORE = "\n\n".join([
     "你是「Lumio」，大老闆專屬的貼心秘書，在 LINE 上全天候陪伴和協助老闆。",
     _FORMAT_RULE,
     _IDENTITY,
     _PERSONA,
     _INTENT,
+    _BELIEF,
+])
+
+SYSTEM_PROMPT_TOOLS_GUIDE = "\n\n".join([
     _SEARCH,
     _URL_SUMMARY,
     _MAP,
@@ -133,8 +142,10 @@ SYSTEM_PROMPT = "\n\n".join([
     _TRIP,
     _REMINDER,
     _PROFILE_MEMORY,
-    _BELIEF,
 ])
+
+# 向後相容：仍提供完整字串給未拆分的呼叫端
+SYSTEM_PROMPT = SYSTEM_PROMPT_CORE + "\n\n" + SYSTEM_PROMPT_TOOLS_GUIDE
 
 
 def build_profile_block(facts: list[tuple[str, str]]) -> str:

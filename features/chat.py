@@ -6,7 +6,10 @@ import logging
 
 import db
 from config import anthropic_client, CLAUDE_MODEL, CLAUDE_MODEL_LIGHT
-from prompts import SYSTEM_PROMPT, build_date_block, build_profile_block
+from prompts import (
+    SYSTEM_PROMPT, SYSTEM_PROMPT_CORE, SYSTEM_PROMPT_TOOLS_GUIDE,
+    build_date_block, build_profile_block,
+)
 from features.tools import TOOLS, dispatch_tool
 
 logger = logging.getLogger("lumio.chat")
@@ -41,8 +44,20 @@ _PRICE_DEFAULT = _PRICE_TABLE["claude-sonnet-4-6"]
 # 工具呼叫迴圈上限（複雜任務可能跨 4-5 輪）
 _MAX_TOOL_TURNS = 6
 
-# 共用之 system cache block：所有單次任務（PDF 摘要 / 文字摘要 / 公文）共用，可命中 cache
-_CACHED_SYS_BLOCK = {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+# 兩段式 system cache：
+# - CORE 區塊（人格/格式規則）極少改動，命中率最高
+# - TOOLS_GUIDE 區塊（工具指引）變動較頻繁，獨立 cache key
+# Anthropic 允許多個 cache_control，每個都會建立 cache breakpoint。
+_CACHED_SYS_CORE = {
+    "type": "text", "text": SYSTEM_PROMPT_CORE,
+    "cache_control": {"type": "ephemeral"},
+}
+_CACHED_SYS_TOOLS = {
+    "type": "text", "text": SYSTEM_PROMPT_TOOLS_GUIDE,
+    "cache_control": {"type": "ephemeral"},
+}
+# 短任務（PDF 摘要 / 公文 / 會議紀錄）只需 CORE（人格與格式），不需工具指引
+_CACHED_SYS_BLOCK = _CACHED_SYS_CORE
 
 
 def _with_cache(items: list[dict]) -> list[dict]:
@@ -58,11 +73,12 @@ _TOOLS_CACHED = _with_cache(TOOLS)
 
 def _build_system(user_id: str = "") -> list[dict]:
     """完整對話用 system：
-    - 靜態 cache block（5 分鐘 ephemeral cache）
-    - 使用者長期記憶區塊（變動低；個人用情境量小，不額外 cache）
+    - CORE cache block（人格/格式，極少改動）
+    - TOOLS_GUIDE cache block（工具指引，可獨立更新）
+    - 使用者長期記憶區塊（變動低；不額外 cache）
     - 動態日期區塊（每次重算）
     """
-    blocks: list[dict] = [_CACHED_SYS_BLOCK]
+    blocks: list[dict] = [_CACHED_SYS_CORE, _CACHED_SYS_TOOLS]
     if user_id:
         try:
             facts = db.profile_list(user_id)
