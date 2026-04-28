@@ -52,6 +52,19 @@ def _rate_limited(user_id: str) -> bool:
     return False
 
 
+def _is_duplicate(message_id: str) -> bool:
+    """LINE webhook 重送去重：mark_processed 利用 PRIMARY KEY 原子寫入，
+    回傳 False 代表已存在 → 略過。"""
+    if not message_id:
+        return False
+    try:
+        return not db.mark_processed(message_id)
+    except Exception as e:
+        # DB 故障時不阻擋訊息（fail-open），僅記錄
+        logger.warning(f"idempotency check 失敗（fail-open）: {e}")
+        return False
+
+
 # ── FastAPI Lifespan ──────────────────────────────
 
 
@@ -129,17 +142,30 @@ def _build_status(user_id: str) -> str:
     else:
         on = "開啟" if sub["briefing"] else "關閉"
         sub_line = f"☀️ 早晨簡報：{on}（每日 {sub['brief_time']}）"
+    try:
+        usage = db.get_usage_summary(user_id)
+        usage_line = (
+            f"💰 Token 用量：今日 {usage['today_calls']} 次 ≈ ${usage['today_cost']:.4f}\n"
+            f"　　　　　　 本月 {usage['month_calls']} 次 ≈ ${usage['month_cost']:.4f}"
+        )
+    except Exception as e:
+        logger.warning(f"取得 token 用量失敗: {e}")
+        usage_line = "💰 Token 用量：（暫無資料）"
     return (
         "📊 Lumio 狀態\n"
         "━━━━━━━━━━━\n"
         f"{sub_line}\n"
         f"📝 待辦：{sum(1 for t in todos if not t[2])} 項未完成 / 共 {len(todos)}\n"
-        f"📒 備忘：{len(notes)} 則"
+        f"📒 備忘：{len(notes)} 則\n"
+        f"{usage_line}"
     )
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_text(event: MessageEvent):
+    if _is_duplicate(event.message.id):
+        logger.info(f"略過重送訊息 mid={event.message.id}")
+        return
     started_at = time.monotonic()
     text = event.message.text
     user_id = event.source.user_id
@@ -195,6 +221,9 @@ def on_text(event: MessageEvent):
 
 @handler.add(MessageEvent, message=ImageMessageContent)
 def on_image(event: MessageEvent):
+    if _is_duplicate(event.message.id):
+        logger.info(f"略過重送圖片 mid={event.message.id}")
+        return
     started_at = time.monotonic()
     user_id = event.source.user_id
     db.upsert_subscription(user_id)
@@ -213,6 +242,9 @@ def on_image(event: MessageEvent):
 
 @handler.add(MessageEvent, message=FileMessageContent)
 def on_file(event: MessageEvent):
+    if _is_duplicate(event.message.id):
+        logger.info(f"略過重送檔案 mid={event.message.id}")
+        return
     started_at = time.monotonic()
     user_id = event.source.user_id
     db.upsert_subscription(user_id)

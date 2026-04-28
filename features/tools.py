@@ -462,6 +462,7 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
             return gen_official_doc(
                 d["recipient"], d["subject"],
                 d.get("points"), d.get("basis"), d.get("plan"),
+                user_id=user_id,
             )
         case "template_list":
             return template_list(user_id)

@@ -10,6 +10,8 @@ from db.subscriptions import (
 from db.push_log import has_pushed_today, mark_pushed, cleanup_push_log
 from db.templates import add_template, list_templates, delete_template
 from db.trips import add_trip, list_trips, delete_trip
+from db.processed_messages import is_processed, mark_processed, cleanup_processed_messages
+from db.token_usage import record_usage, get_usage_summary, cleanup_token_usage
 
 __all__ = [
     "get_db", "DATABASE_URL", "init_db",
@@ -20,4 +22,6 @@ __all__ = [
     "has_pushed_today", "mark_pushed", "cleanup_push_log",
     "add_template", "list_templates", "delete_template",
     "add_trip", "list_trips", "delete_trip",
+    "is_processed", "mark_processed", "cleanup_processed_messages",
+    "record_usage", "get_usage_summary", "cleanup_token_usage",
 ]

@@ -105,4 +105,26 @@ def init_db():
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS processed_messages (
+                message_id TEXT PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_proc_msg_created ON processed_messages(created_at)")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS token_usage (
+                user_id            TEXT NOT NULL,
+                usage_date         DATE NOT NULL,
+                model              TEXT NOT NULL,
+                input_tokens       BIGINT DEFAULT 0,
+                cache_write_tokens BIGINT DEFAULT 0,
+                cache_read_tokens  BIGINT DEFAULT 0,
+                output_tokens      BIGINT DEFAULT 0,
+                cost_usd           NUMERIC(10, 6) DEFAULT 0,
+                calls              INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, usage_date, model)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_token_user_date ON token_usage(user_id, usage_date DESC)")
     logger.info("PostgreSQL 初始化完成（含 Stage 0 推播相關表）")

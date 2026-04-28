@@ -121,7 +121,7 @@ def _morning_briefing_job() -> None:
 
 
 def _cleanup_job() -> None:
-    """定期清理推播紀錄；advisory lock 確保多副本下只有一節點執行。"""
+    """定期清理推播紀錄與訊息去重表；advisory lock 確保多副本下只有一節點執行。"""
     with _advisory_lock(_LOCK_CLEANUP) as acquired:
         if not acquired:
             return
@@ -129,3 +129,11 @@ def _cleanup_job() -> None:
             db.cleanup_push_log(retention_days=90)
         except Exception as e:
             logger.warning(f"push_log 清理失敗: {e}")
+        try:
+            db.cleanup_processed_messages(retention_days=7)
+        except Exception as e:
+            logger.warning(f"processed_messages 清理失敗: {e}")
+        try:
+            db.cleanup_token_usage(retention_days=365)
+        except Exception as e:
+            logger.warning(f"token_usage 清理失敗: {e}")
