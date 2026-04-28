@@ -137,4 +137,19 @@ def init_db():
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_token_user_date ON token_usage(user_id, usage_date DESC)")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id              SERIAL PRIMARY KEY,
+                user_id         TEXT NOT NULL,
+                amount          NUMERIC(12, 2) NOT NULL,
+                category        TEXT NOT NULL,
+                description     TEXT,
+                payment_method  TEXT,
+                occurred_at     DATE NOT NULL,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                receipt_url     TEXT
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_exp_user_date ON expenses(user_id, occurred_at DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_exp_user_cat ON expenses(user_id, category)")
     logger.info("PostgreSQL 初始化完成（含 Stage 0 推播相關表）")
