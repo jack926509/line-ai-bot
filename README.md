@@ -168,7 +168,7 @@ line-ai-bot/
 │   ├── expense.py       # 記帳業務邏輯（11 分類、6 付款方式）
 │   ├── flex.py          # Flex Message 卡片 + postback 協定（todo/note/expense）
 │   └── audio.py         # OpenAI Whisper 整合
-└── tests/               # pytest 單元測試（72 個，純函式覆蓋）
+└── tests/               # pytest 單元測試（80 個，純函式覆蓋）
 ```
 
 ---
@@ -202,7 +202,7 @@ pip install pytest
 python -m pytest tests/ -v
 ```
 
-72 個純函式測試，涵蓋：時間計算、Markdown 清理、postback 解析、Flex 卡片組裝、prompt 拆分、todo/expense 解析、金額格式化等。
+80 個純函式測試，涵蓋：時間計算（含期間切片月／年邊界）、Markdown 清理、postback 解析、Flex 卡片組裝、prompt 拆分、todo/expense 解析、金額格式化等。
 
 ---
 
