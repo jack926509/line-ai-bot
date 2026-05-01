@@ -5,6 +5,7 @@ from decimal import Decimal
 from features.expense import (
     _fmt_amount, _parse_amount, _bar, _emoji,
     label_period, _parse_date,
+    period_range, today_tw,
     CATEGORIES, CATEGORY_EMOJI,
 )
 
@@ -100,3 +101,44 @@ class TestParseDate:
     def test_none(self):
         assert _parse_date(None) is None
         assert _parse_date("") is None
+
+
+class TestPeriodRange:
+    """以週三 2026-04-29 作為固定基準，避開時區邊界與月底特殊情況。"""
+
+    BASE = date(2026, 4, 29)  # 週三
+
+    def test_today(self):
+        assert period_range("today", self.BASE) == (self.BASE, self.BASE)
+
+    def test_yesterday(self):
+        assert period_range("yesterday", self.BASE) == (date(2026, 4, 28), date(2026, 4, 28))
+
+    def test_week_starts_on_monday(self):
+        sd, ed = period_range("week", self.BASE)
+        assert sd == date(2026, 4, 27)  # 該週週一
+        assert ed == self.BASE
+
+    def test_month_starts_on_first(self):
+        sd, ed = period_range("month", self.BASE)
+        assert sd == date(2026, 4, 1)
+        assert ed == self.BASE
+
+    def test_last_month(self):
+        sd, ed = period_range("last_month", self.BASE)
+        assert sd == date(2026, 3, 1)
+        assert ed == date(2026, 3, 31)
+
+    def test_year(self):
+        sd, ed = period_range("year", self.BASE)
+        assert sd == date(2026, 1, 1)
+        assert ed == self.BASE
+
+    def test_unknown_falls_back_to_today(self):
+        assert period_range("custom", self.BASE) == (self.BASE, self.BASE)
+
+    def test_today_tw_returns_date(self):
+        # 不驗具體值（依執行時刻），只驗型別與合理範圍
+        d = today_tw()
+        assert isinstance(d, date)
+        assert d.year >= 2025

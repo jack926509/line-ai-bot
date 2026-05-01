@@ -3,11 +3,8 @@
 需設定 OPENAI_API_KEY 環境變數；未設定時 transcribe 會回 None 並由 handler 提示使用者。
 """
 import io
-import logging
 
 from config import OPENAI_API_KEY
-
-logger = logging.getLogger("lumio.audio")
 
 _client = None
 
@@ -31,14 +28,10 @@ def transcribe(audio_bytes: bytes, filename: str = "voice.m4a") -> str | None:
     client = _get_client()
     if client is None:
         return None
-    try:
-        f = io.BytesIO(audio_bytes)
-        f.name = filename  # OpenAI SDK 需要檔名以推測格式
-        resp = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f,
-        )
-        return getattr(resp, "text", "") or ""
-    except Exception as e:
-        logger.exception(f"Whisper 轉錄失敗: {e}")
-        raise
+    f = io.BytesIO(audio_bytes)
+    f.name = filename  # OpenAI SDK 需要檔名以推測格式
+    resp = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=f,
+    )
+    return getattr(resp, "text", "") or ""

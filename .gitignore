@@ -15,6 +15,11 @@ env/
 .env.local
 .env.*.local
 
+# Google Cloud service account 金鑰（敏感，絕對禁止上傳）
+total-cedar-*.json
+*-service-account*.json
+*-credentials.json
+
 # 系統
 .DS_Store
 Thumbs.db

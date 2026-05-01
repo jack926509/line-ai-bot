@@ -33,8 +33,32 @@ CATEGORY_EMOJI = {
 PAYMENT_METHODS = ["現金", "信用卡", "Line Pay", "悠遊卡", "街口", "ATM"]
 
 
-def _today() -> date:
+def today_tw() -> date:
+    """台北時區的今日日期。供本模組與外部（如 main.py）共用。"""
     return datetime.now(_TZ).date()
+
+
+def period_range(period: str, today: date | None = None) -> tuple[date, date]:
+    """將期間關鍵字（today/yesterday/week/month/last_month/year）換算為 (start, end)。
+
+    未知 period 預設回今天 ~ 今天。供 expense_summary 與 main.py Flex 統計共用。
+    """
+    t = today or today_tw()
+    if period == "today":
+        return t, t
+    if period == "yesterday":
+        d = t - timedelta(days=1)
+        return d, d
+    if period == "week":
+        return t - timedelta(days=t.weekday()), t
+    if period == "month":
+        return t.replace(day=1), t
+    if period == "last_month":
+        ed = t.replace(day=1) - timedelta(days=1)
+        return ed.replace(day=1), ed
+    if period == "year":
+        return t.replace(month=1, day=1), t
+    return t, t
 
 
 def _emoji(category: str) -> str:
@@ -102,7 +126,7 @@ def expense_query(
     category: str | None = None,
 ) -> str:
     """條件查詢。日期為 YYYY-MM-DD 字串。皆未指定時取今天。"""
-    today = _today()
+    today = today_tw()
     sd = _parse_date(start_date) or today
     ed = _parse_date(end_date) or today
     if ed < sd:
@@ -127,27 +151,9 @@ def expense_query(
 
 def expense_summary(user_id: str, period: str = "month") -> str:
     """彙總統計。period: today / yesterday / week / month / last_month / year。"""
-    today = _today()
-    if period == "today":
-        sd = ed = today
-    elif period == "yesterday":
-        sd = ed = today - timedelta(days=1)
-    elif period == "week":
-        # 本週一到今天
-        sd = today - timedelta(days=today.weekday())
-        ed = today
-    elif period == "month":
-        sd = today.replace(day=1)
-        ed = today
-    elif period == "last_month":
-        first = today.replace(day=1)
-        ed = first - timedelta(days=1)
-        sd = ed.replace(day=1)
-    elif period == "year":
-        sd = today.replace(month=1, day=1)
-        ed = today
-    else:
+    if period not in ("today", "yesterday", "week", "month", "last_month", "year"):
         return f"⚠️ 不支援的期間：{period}"
+    sd, ed = period_range(period)
     return _format_summary(user_id, sd, ed, label_period(period))
 
 

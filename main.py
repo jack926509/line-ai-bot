@@ -37,7 +37,7 @@ from features.flex import (
 )
 from features.audio import transcribe
 from features.expense import (
-    handle_expense, expense_delete, label_period, _today,
+    handle_expense, expense_delete, label_period, today_tw, period_range,
 )
 
 
@@ -210,7 +210,7 @@ def _expense_response(t: str, user_id: str):
 
     if not arg:
         # 預設今日列表
-        today = _today()
+        today = today_tw()
         rows = db.list_expenses(user_id, today, today, limit=20)
         flex = expense_carousel(rows, title=f"💰 今日（{today}）")
         if flex is not None:
@@ -224,39 +224,14 @@ def _expense_response(t: str, user_id: str):
     }
     if arg in period_map:
         period = period_map[arg]
-        sd, ed = _period_range(period)
+        sd, ed = period_range(period)
         summary = db.expense_summarize(user_id, sd, ed)
         if summary["count"] > 0:
             return expense_summary_bubble(summary, label_period(period), sd, ed)
-        # 空也走文字回覆友善訊息
         return f"📭 {label_period(period)}（{sd}~{ed}）尚無記錄"
 
     # 其他子指令（查 / 刪 / 清單 / 說明）走文字
     return handle_expense(t, user_id)
-
-
-def _period_range(period: str):
-    """同 features.expense.expense_summary 的期間切片，但回 (sd, ed) 給 Flex 統計用。"""
-    today = _today()
-    if period == "today":
-        return today, today
-    if period == "yesterday":
-        from datetime import timedelta
-        d = today - timedelta(days=1)
-        return d, d
-    if period == "week":
-        from datetime import timedelta
-        return today - timedelta(days=today.weekday()), today
-    if period == "month":
-        return today.replace(day=1), today
-    if period == "last_month":
-        from datetime import timedelta
-        first = today.replace(day=1)
-        ed = first - timedelta(days=1)
-        return ed.replace(day=1), ed
-    if period == "year":
-        return today.replace(month=1, day=1), today
-    return today, today
 
 
 def _build_status(user_id: str) -> str:
@@ -278,7 +253,7 @@ def _build_status(user_id: str) -> str:
         logger.warning(f"取得 token 用量失敗: {e}")
         usage_line = "🤖 Token 用量：（暫無資料）"
     try:
-        today = _today()
+        today = today_tw()
         month_start = today.replace(day=1)
         es = db.expense_summarize(user_id, month_start, today)
         if es["count"] > 0:
@@ -391,7 +366,7 @@ def on_postback(event: PostbackEvent):
         _send(event.reply_token, user_id, flex if flex else text_msg, started_at)
     elif act == "expense.del" and eid > 0:
         text_msg = expense_delete(user_id, eid)
-        today = _today()
+        today = today_tw()
         flex = expense_carousel(
             db.list_expenses(user_id, today, today, limit=20),
             title=f"💰 今日（{today}）",
