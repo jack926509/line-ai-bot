@@ -299,12 +299,6 @@ def on_text(event: MessageEvent):
         _send(event.reply_token, user_id, handle_reset_memory(user_id), started_at)
     elif t == "/簡報":
         _send(event.reply_token, user_id, build_morning_briefing(user_id), started_at)
-    elif t in ("/簡報 開", "/簡報開"):
-        db.set_briefing(user_id, True)
-        _send(event.reply_token, user_id, "✅ 早晨簡報已開啟（每日 08:00 推送）", started_at)
-    elif t in ("/簡報 關", "/簡報關"):
-        db.set_briefing(user_id, False)
-        _send(event.reply_token, user_id, "🔕 早晨簡報已關閉", started_at)
     elif t in ("/狀態", "/status"):
         _send(event.reply_token, user_id, _build_status(user_id), started_at)
     elif t.startswith("/摘要 ") or t.startswith("/摘要\n"):

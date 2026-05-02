@@ -63,12 +63,14 @@
 
 ## 3. 排程（features/scheduler.py）
 
+> **個人版**：所有自動推播通知（早晨簡報、提醒派送）已移除，未來通知系統將重新設計。
+
 | Job | 觸發 | 動作 |
 |-----|------|------|
-| 早晨簡報 | CronTrigger(`BRIEF_HOUR`:`BRIEF_MINUTE`，Asia/Taipei，預設 08:00) | 對所有 `subscriptions.briefing=TRUE` 的使用者，組裝 briefing 並 push（去重靠 `push_log`） |
-| 一次性工作流 | `register_one_off(when, callback)` | 預留給多步驟工作流（workflow.py） |
+| DB 清理 | CronTrigger(03:30，Asia/Taipei) | `push_log` 90 天 / `processed_messages` 7 天 / `token_usage` 365 天 / `workflows` 30 天 |
+| 一次性任務 | `register_one_off(when, callback)` | 預留給未來通知派送 |
 
-`DISABLE_SCHEDULER=1` 可關閉（本機測試或多副本部署時）。
+`DISABLE_SCHEDULER=1` 可關閉。
 
 ---
 

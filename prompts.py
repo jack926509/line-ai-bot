@@ -94,14 +94,6 @@ _TRIP = (
     "唯有老闆明確說「規劃／推薦／行程建議／幫我安排活動」時，才產出逐日內容。"
 )
 
-_REMINDER = (
-    "【提醒】\n"
-    "老闆說「提醒我 X 在 Y 時間」「30 分鐘後 X」「明天 9 點 X」用 reminder_add_once。"
-    "說「每天 HH:MM」用 reminder_add_daily；說「每週 N HH:MM」用 reminder_add_weekly（1=週一…7=週日）。\n"
-    "查詢：reminder_list；取消：reminder_cancel(id)。\n"
-    "推算時間時依現在真實時間，輸出 ISO 格式 YYYY-MM-DDTHH:MM。"
-)
-
 _EXPENSE = (
     "【記帳】\n"
     "老闆說「午餐 120」「星巴克 150 刷卡」「Uber 230」「薪水進帳 50000」這類「物品/事件 + 金額」"
@@ -172,7 +164,6 @@ SYSTEM_PROMPT_TOOLS_GUIDE = "\n\n".join([
     _DOC_TEMPLATE,
     _LAW,
     _TRIP,
-    _REMINDER,
     _EXPENSE,
     _TAIWAN,
     _PROFILE_MEMORY,

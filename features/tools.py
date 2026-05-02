@@ -11,11 +11,7 @@ from features.doc_official import (
 )
 from features.law import law_search
 from features.trip import trip_create, trip_list, trip_detail, trip_delete
-from features.workflow import (
-    compose_workflow,
-    reminder_add_once, reminder_add_daily, reminder_add_weekly,
-    reminder_list, reminder_cancel,
-)
+from features.workflow import compose_workflow
 import features.todo as todo_feat
 import features.note as note_feat
 import features.profile as profile_feat
@@ -433,65 +429,6 @@ _PROFILE_FORGET = {
     },
 }
 
-_REMINDER_ONCE = {
-    "name": "reminder_add_once",
-    "description": (
-        "排定一次性提醒。老闆說「提醒我 X 在 Y 時間」「30 分鐘後 X」「明天早上 9 點 X」時使用。"
-        "請先依當前時間換算為 ISO 格式 (YYYY-MM-DDTHH:MM)。"
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "text": {"type": "string", "description": "提醒內容"},
-            "when_iso": {"type": "string", "description": "提醒時間 ISO（例：2026-04-29T09:00）"},
-        },
-        "required": ["text", "when_iso"],
-    },
-}
-
-_REMINDER_DAILY = {
-    "name": "reminder_add_daily",
-    "description": "每天固定時間提醒。例：「每天早上 7 點提醒我喝水」。",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "text": {"type": "string", "description": "提醒內容"},
-            "hhmm": {"type": "string", "description": "時間 HH:MM（24 小時制）"},
-        },
-        "required": ["text", "hhmm"],
-    },
-}
-
-_REMINDER_WEEKLY = {
-    "name": "reminder_add_weekly",
-    "description": "每週固定時間提醒。例：「每週五下午 5 點交週報」。",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "text": {"type": "string", "description": "提醒內容"},
-            "weekday": {"type": "integer", "description": "1=週一, 2=週二, ..., 7=週日"},
-            "hhmm": {"type": "string", "description": "時間 HH:MM"},
-        },
-        "required": ["text", "weekday", "hhmm"],
-    },
-}
-
-_REMINDER_LIST = {
-    "name": "reminder_list",
-    "description": "列出所有待執行的提醒（含一次性、每日、每週）。",
-    "input_schema": {"type": "object", "properties": {}},
-}
-
-_REMINDER_CANCEL = {
-    "name": "reminder_cancel",
-    "description": "取消提醒（用 reminder_list 查到的 id）。",
-    "input_schema": {
-        "type": "object",
-        "properties": {"id": {"type": "integer", "description": "提醒 id"}},
-        "required": ["id"],
-    },
-}
-
 _EXPENSE_ADD = {
     "name": "expense_add",
     "description": (
@@ -602,7 +539,6 @@ TOOLS = [
     _TRIP_CREATE, _TRIP_LIST, _TRIP_DETAIL, _TRIP_DELETE,
     _COMPOSE_WORKFLOW,
     _PROFILE_REMEMBER, _PROFILE_LIST, _PROFILE_FORGET,
-    _REMINDER_ONCE, _REMINDER_DAILY, _REMINDER_WEEKLY, _REMINDER_LIST, _REMINDER_CANCEL,
     _EXPENSE_ADD, _EXPENSE_QUERY, _EXPENSE_SUMMARY, _EXPENSE_DELETE,
     _GAS_PRICE, _INVOICE_LOTTERY, _TAX_COUNTDOWN,
 ]
@@ -699,18 +635,6 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
             return profile_feat.list_memory(user_id)
         case "profile_forget":
             return profile_feat.forget(user_id, d["key"])
-
-        # ── 提醒
-        case "reminder_add_once":
-            return reminder_add_once(user_id, d["text"], d["when_iso"])
-        case "reminder_add_daily":
-            return reminder_add_daily(user_id, d["text"], d["hhmm"])
-        case "reminder_add_weekly":
-            return reminder_add_weekly(user_id, d["text"], d["weekday"], d["hhmm"])
-        case "reminder_list":
-            return reminder_list(user_id)
-        case "reminder_cancel":
-            return reminder_cancel(user_id, d["id"])
 
         # ── 記帳
         case "expense_add":
