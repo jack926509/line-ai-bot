@@ -20,6 +20,7 @@ import features.todo as todo_feat
 import features.note as note_feat
 import features.profile as profile_feat
 import features.expense as expense_feat
+import features.taiwan as taiwan_feat
 
 
 # ── Tool 定義 ────────────────────────────────────
@@ -555,6 +556,42 @@ _EXPENSE_DELETE = {
 }
 
 
+_GAS_PRICE = {
+    "name": "gas_price",
+    "description": (
+        "查詢中油（CPC）今日 92／95／98 無鉛汽油與超級柴油牌價。"
+        "老闆問「今天油價」「中油多少」「下週油價會漲嗎」時使用。"
+    ),
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+}
+
+_INVOICE_LOTTERY = {
+    "name": "invoice_lottery",
+    "description": (
+        "查詢最新一期統一發票中獎號碼；可選擇傳入老闆的發票號碼進行對獎提示。"
+        "老闆問「發票中了嗎」「最新一期中獎號碼」時使用。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "numbers": {
+                "type": "string",
+                "description": "可選，使用者欲對獎的 8 位發票號碼（多筆以空白／逗號分隔）",
+            },
+        },
+        "required": [],
+    },
+}
+
+_TAX_COUNTDOWN = {
+    "name": "tax_countdown",
+    "description": (
+        "綜合所得稅申報倒數與提醒。老闆問「報稅還剩幾天」「報稅怎麼準備」時使用。"
+    ),
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+}
+
+
 TOOLS = [
     _WEB_SEARCH, _SUMMARIZE_URL, _GOOGLE_MAP,
     _GCAL_QUERY, _GCAL_UPCOMING, _GCAL_ADD, _GCAL_UPDATE, _GCAL_DELETE, _GCAL_FREE_BUSY,
@@ -567,6 +604,7 @@ TOOLS = [
     _PROFILE_REMEMBER, _PROFILE_LIST, _PROFILE_FORGET,
     _REMINDER_ONCE, _REMINDER_DAILY, _REMINDER_WEEKLY, _REMINDER_LIST, _REMINDER_CANCEL,
     _EXPENSE_ADD, _EXPENSE_QUERY, _EXPENSE_SUMMARY, _EXPENSE_DELETE,
+    _GAS_PRICE, _INVOICE_LOTTERY, _TAX_COUNTDOWN,
 ]
 
 
@@ -580,7 +618,7 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
         case "web_search":
             return web_search(d["query"])
         case "summarize_url":
-            return summarize_url(d["url"])
+            return summarize_url(d["url"], user_id=user_id)
         case "google_map_search":
             return google_map_search(d["places"])
 
@@ -688,6 +726,14 @@ def dispatch_tool(name: str, input_data: dict, user_id: str = "") -> str:
             return expense_feat.expense_summary(user_id, d["period"])
         case "expense_delete":
             return expense_feat.expense_delete(user_id, d["id"])
+
+        # ── 台灣個人化
+        case "gas_price":
+            return taiwan_feat.gas_price()
+        case "invoice_lottery":
+            return taiwan_feat.invoice_lottery(d.get("numbers"))
+        case "tax_countdown":
+            return taiwan_feat.tax_countdown()
 
         case _:
             return "未知的工具"

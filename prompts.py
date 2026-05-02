@@ -126,6 +126,14 @@ _EXPENSE = (
     "回覆風格：簡短確認（「好的，已記下」），不要囉嗦複述所有資訊。"
 )
 
+_TAIWAN = (
+    "【台灣個人化】\n"
+    "老闆問「今天油價」「中油多少」用 gas_price。\n"
+    "問「最新發票中獎號碼」「我的發票中獎了嗎」用 invoice_lottery"
+    "（若老闆有給 8 位數號碼則一併傳入 numbers 參數）。\n"
+    "問「報稅還剩幾天」「報稅怎麼準備」用 tax_countdown。"
+)
+
 _PROFILE_MEMORY = (
     "【長期記憶】\n"
     "你可以記住老闆的個人偏好、常用聯絡人、家人資訊、工作背景等：\n"
@@ -166,6 +174,7 @@ SYSTEM_PROMPT_TOOLS_GUIDE = "\n\n".join([
     _TRIP,
     _REMINDER,
     _EXPENSE,
+    _TAIWAN,
     _PROFILE_MEMORY,
 ])
 

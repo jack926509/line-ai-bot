@@ -10,7 +10,7 @@ Lumio 是以 Anthropic Claude 為核心、串接 LINE Messaging API 的個人秘
 | 類別 | 自然語言入口 | 對應工具 |
 |------|--------------|----------|
 | 智慧搜尋 | 「最新台積電股價」 | `web_search`（Perplexity sonar） |
-| 網址摘要 | 貼上任何 URL | `summarize_url` |
+| 網址摘要 | 貼上任何 URL（PDF 自動下載解析） | `summarize_url`（HTML 走 Perplexity、PDF 走 Claude vision） |
 | 地圖連結 | 「信義區牛排」 | `google_map_search` |
 | Google Calendar | 「排明天3點開會」「把那會議改到5點」 | `gcal_query / gcal_add / gcal_update / gcal_delete / gcal_free_busy / gcal_upcoming` |
 | 待辦 / 備忘 | 「幫我記下要買牛奶」 | `todo_add / todo_list / todo_complete / todo_delete / note_add / note_list / note_delete` |
@@ -26,8 +26,10 @@ Lumio 是以 Anthropic Claude 為核心、串接 LINE Messaging API 的個人秘
 | 文件摘要 | 上傳 .pdf / .txt / .md / .csv | `analyze_file`（PDF 雙上限保護：60 頁／200k 字） |
 | **語音訊息** | 直接傳語音 | OpenAI Whisper → Claude（需 `OPENAI_API_KEY`） |
 | 早晨簡報 | 每日 08:00 自動推播（行程 + 待辦 + 昨日支出 + 天氣） | `briefing.build_morning_briefing` |
+| **台灣個人化** | 「今天油價」「最新發票中獎號碼」「報稅還剩幾天」 | `gas_price / invoice_lottery / tax_countdown` |
+| **資料匯出** | 一鍵打包待辦／備忘／記帳／對話為純文字 | `/匯出 [天數]` |
 
-> Claude 工具總數：**39**（自動工具呼叫上限 6 輪）
+> Claude 工具總數：**42**（自動工具呼叫上限 6 輪）
 
 ### 快捷指令
 
@@ -35,7 +37,11 @@ Lumio 是以 Anthropic Claude 為核心、串接 LINE Messaging API 的個人秘
 |------|------|
 | `/簡報` / `/簡報 開` / `/簡報 關` | 立即推播／開關每日推送 |
 | `/狀態` | 訂閱、待辦／備忘統計、本月支出、Token 用量 |
-| `/摘要 <URL>` | 即時摘要 |
+| `/摘要 <URL>` | 即時摘要（PDF URL 自動下載解析） |
+| `/油價` | 中油 92／95／98／柴油牌價 |
+| `/發票 [號碼]` | 最新一期統一發票中獎號碼／對獎 |
+| `/報稅` | 綜所稅倒數與提醒 |
+| `/匯出 [天數]` | 打包匯出待辦／備忘／記帳／對話（預設 7 天） |
 | `/範本` / `/範本 套用 N` / `/範本 刪 N` | 範本庫操作 |
 | `/法規 <關鍵字>` | 查台灣法規條文正文 |
 | `/旅遊` / `/旅遊 查看 N` / `/旅遊 刪 N` | 旅程列表／詳情／刪除（同步 GCal） |
@@ -149,11 +155,11 @@ line-ai-bot/
 │   ├── workflows.py           # 提醒（一次性 / 每日 / 每週）
 │   └── expenses.py            # 記帳
 ├── features/
-│   ├── chat.py          # Claude 主迴圈、tool use（最多 6 輪）、雙層 prompt cache、檔案摘要
-│   ├── tools.py         # 39 個工具定義 + match/case dispatch
+│   ├── chat.py          # Claude 主迴圈、tool use（最多 6 輪）、雙層 prompt cache、檔案摘要（含 analyze_pdf_bytes 共用）
+│   ├── tools.py         # 42 個工具定義 + match/case dispatch
 │   ├── perplexity.py    # Perplexity 統一介面
 │   ├── search.py        # web_search / google_map_search
-│   ├── url_summary.py   # 網址摘要
+│   ├── url_summary.py   # 網址摘要（HTML→Perplexity；PDF URL→下載 + Claude）
 │   ├── calendar.py      # Google Calendar CRUD（含時區補正）
 │   ├── briefing.py      # 早晨簡報（行程 + 待辦 + 昨日支出 + 天氣）
 │   ├── doc_official.py  # 公文初稿 + 範本庫
@@ -167,8 +173,10 @@ line-ai-bot/
 │   ├── profile.py       # 長期記憶入口
 │   ├── expense.py       # 記帳業務邏輯（11 分類、6 付款方式）
 │   ├── flex.py          # Flex Message 卡片 + postback 協定（todo/note/expense）
-│   └── audio.py         # OpenAI Whisper 整合
-└── tests/               # pytest 單元測試（80 個，純函式覆蓋）
+│   ├── audio.py         # OpenAI Whisper 整合
+│   ├── taiwan.py        # 油價 / 統一發票 / 報稅倒數（前兩者走 Perplexity）
+│   └── export.py        # 一鍵打包待辦/備忘/記帳/對話為純文字
+└── tests/               # pytest 單元測試（95 個，純函式覆蓋）
 ```
 
 ---
@@ -202,7 +210,7 @@ pip install pytest
 python -m pytest tests/ -v
 ```
 
-80 個純函式測試，涵蓋：時間計算（含期間切片月／年邊界）、Markdown 清理、postback 解析、Flex 卡片組裝、prompt 拆分、todo/expense 解析、金額格式化等。
+95 個純函式測試，涵蓋：時間計算（含期間切片月／年邊界）、Markdown 清理、postback 解析、Flex 卡片組裝、prompt 拆分、todo/expense 解析、金額格式化、報稅倒數、PDF URL 偵測等。
 
 ---
 

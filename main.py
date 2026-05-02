@@ -39,6 +39,8 @@ from features.audio import transcribe
 from features.expense import (
     handle_expense, expense_delete, label_period, today_tw, period_range,
 )
+from features.taiwan import gas_price, invoice_lottery, tax_countdown
+from features.export import export_summary
 
 
 # ── Reply token / Rate limit ─────────────────────
@@ -307,7 +309,7 @@ def on_text(event: MessageEvent):
         _send(event.reply_token, user_id, _build_status(user_id), started_at)
     elif t.startswith("/摘要 ") or t.startswith("/摘要\n"):
         url = t[3:].strip()
-        _send(event.reply_token, user_id, summarize_url(url), started_at)
+        _send(event.reply_token, user_id, summarize_url(url, user_id=user_id), started_at)
     elif t.startswith("/範本"):
         _send(event.reply_token, user_id, handle_template(t, user_id), started_at)
     elif t.startswith("/法規 ") or t.startswith("/法規\n"):
@@ -324,6 +326,22 @@ def on_text(event: MessageEvent):
         _send(event.reply_token, user_id, _expense_response(t, user_id), started_at)
     elif t.startswith("/日曆") or t.startswith("/cal"):
         _send(event.reply_token, user_id, handle_cal(t), started_at)
+    elif t == "/油價":
+        _send(event.reply_token, user_id, gas_price(), started_at)
+    elif t.startswith("/發票"):
+        nums = t[3:].strip() or None
+        _send(event.reply_token, user_id, invoice_lottery(nums), started_at)
+    elif t == "/報稅":
+        _send(event.reply_token, user_id, tax_countdown(), started_at)
+    elif t.startswith("/匯出"):
+        parts = t.split(maxsplit=1)
+        days = 7
+        if len(parts) > 1:
+            try:
+                days = int(parts[1].strip())
+            except ValueError:
+                pass
+        _send(event.reply_token, user_id, export_summary(user_id, days), started_at)
     elif t in ("/h", "/help"):
         _send(event.reply_token, user_id, handle_help(), started_at)
     else:

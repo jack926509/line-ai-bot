@@ -263,7 +263,7 @@ def analyze_file(user_id: str, file_bytes: bytes, filename: str) -> str:
 
     try:
         if ext == "pdf":
-            reply = _analyze_pdf(file_bytes, filename, user_id=user_id)
+            reply = analyze_pdf_bytes(file_bytes, filename, user_id=user_id)
         else:
             text = file_bytes.decode("utf-8", errors="replace")
             reply = chunked_summarize(
@@ -281,7 +281,8 @@ def analyze_file(user_id: str, file_bytes: bytes, filename: str) -> str:
     return reply
 
 
-def _analyze_pdf(file_bytes: bytes, filename: str, user_id: str = "") -> str:
+def analyze_pdf_bytes(file_bytes: bytes, filename: str, user_id: str = "") -> str:
+    """從 bytes 摘要 PDF。供上傳檔案 (analyze_file) 與 PDF URL (summarize_url) 共用。"""
     if len(file_bytes) <= _PDF_INLINE_MAX:
         # 小檔案：直接送 Claude，保留完整排版與圖表理解能力
         pdf_b64 = base64.b64encode(file_bytes).decode()
